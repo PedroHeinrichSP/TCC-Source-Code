@@ -1,0 +1,45 @@
+{
+  "presets": {
+    "smoke": {
+      "label": "Smoke Test",
+      "description": "Validação rápida do pipeline (~1-2 min CPU)",
+      "nerf_static": {"N_iter": 100, "i_weights": 100, "i_testset": 100, "i_video": 100, "i_print": 50},
+      "nerf_dynamic": {"N_iter": 100, "i_weights": 100, "i_testset": 100, "i_video": 100, "i_print": 50},
+      "gs_static": {"iterations": 100},
+      "gs_dynamic": {"iterations": 100}
+    },
+    "quick": {
+      "label": "Rápido",
+      "description": "Resultados preliminares rápidos (~5-15 min CPU)",
+      "nerf_static": {"N_iter": 1000, "i_weights": 1000, "i_testset": 1000, "i_video": 1000, "i_print": 100},
+      "nerf_dynamic": {"N_iter": 1000, "i_weights": 1000, "i_testset": 1000, "i_video": 1000, "i_print": 100},
+      "gs_static": {"iterations": 1000},
+      "gs_dynamic": {"iterations": 1000}
+    },
+    "preview": {
+      "label": "Preview",
+      "description": "Resultados visíveis com qualidade razoável (~30-60 min CPU)",
+      "nerf_static": {"N_iter": 10000, "i_weights": 5000, "i_testset": 10000, "i_video": 10000, "i_print": 500},
+      "nerf_dynamic": {"N_iter": 10000, "i_weights": 5000, "i_testset": 10000, "i_video": 10000, "i_print": 500},
+      "gs_static": {"iterations": 7000},
+      "gs_dynamic": {"iterations": 7000}
+    },
+    "standard": {
+      "label": "Padrão",
+      "description": "Resultados de qualidade para comparação com papers (~2-6h CPU)",
+      "nerf_static": {"N_iter": 50000, "i_weights": 10000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
+      "nerf_dynamic": {"N_iter": 50000, "i_weights": 10000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
+      "gs_static": {"iterations": 30000},
+      "gs_dynamic": {"iterations": 30000}
+    },
+    "full": {
+      "label": "Completo (Paper)",
+      "description": "Reprodução completa dos papers originais (~12-48h CPU)",
+      "nerf_static": {"N_iter": 200000, "i_weights": 50000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
+      "nerf_dynamic": {"N_iter": 800000, "i_weights": 100000, "i_testset": 200000, "i_video": 200000, "i_print": 1000},
+      "gs_static": {"iterations": 30000},
+      "gs_dynamic": {"iterations": 40000}
+    }
+  },
+  "default_preset": "quick"
+}

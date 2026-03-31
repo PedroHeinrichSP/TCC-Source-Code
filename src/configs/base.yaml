@@ -1,0 +1,18 @@
+project:
+  name: nvs-benchmark
+  seed: 42
+
+runtime:
+  device_preference: auto
+  hardware_profile: adaptive
+  num_workers: 2
+
+paths:
+  data_root: ./data
+  artifacts_root: ./artifacts
+  logs_root: ./logs
+
+report:
+  formats:
+    - html
+    - pdf

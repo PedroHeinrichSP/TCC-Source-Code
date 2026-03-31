@@ -1,0 +1,50 @@
+﻿{
+  "datasets": [
+    {
+      "id": "blender_synthetic",
+      "label": "Blender Synthetic",
+      "path": "./data/blender_synthetic",
+      "url": "https://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_synthetic.zip",
+      "command": "powershell -NoProfile -Command \"$ProgressPreference='SilentlyContinue'; $out='nerf_synthetic.zip'; Invoke-WebRequest -Uri 'https://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_synthetic.zip' -OutFile $out; Expand-Archive -Force $out './data/blender_synthetic'; Remove-Item $out\"",
+      "size_mb": 1700
+    }
+  ],
+  "methods": [
+    {
+      "id": "nerf_static",
+      "label": "NeRF Static (bmild/nerf)",
+      "path": "./third_party/nerf",
+      "url": "https://github.com/bmild/nerf",
+      "command": "git clone https://github.com/bmild/nerf ./third_party/nerf",
+      "size_mb": null
+    },
+    {
+      "id": "nerf_dynamic",
+      "label": "D-NeRF (albertpumarola/D-NeRF)",
+      "path": "./third_party/d_nerf",
+      "url": "https://github.com/albertpumarola/D-NeRF",
+      "command": "git clone https://github.com/albertpumarola/D-NeRF ./third_party/d_nerf",
+      "size_mb": null
+    },
+    {
+      "id": "gs_static",
+      "label": "3D Gaussian Splatting",
+      "path": "./third_party/gaussian_splatting",
+      "url": "https://github.com/graphdeco-inria/gaussian-splatting",
+      "command": "git clone https://github.com/graphdeco-inria/gaussian-splatting ./third_party/gaussian_splatting",
+      "size_mb": null
+    },
+    {
+      "id": "gs_dynamic",
+      "label": "4D Gaussian Splatting",
+      "path": "./third_party/4d_gaussians",
+      "url": "https://github.com/hustvl/4DGaussians",
+      "command": "git clone https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
+      "size_mb": null
+    }
+  ],
+  "notes": [
+    "Catalogo preparado para download real. Ajuste os caminhos se necessario.",
+    "Para Linux/Mac, substitua o comando PowerShell por curl/unzip equivalente."
+  ]
+}

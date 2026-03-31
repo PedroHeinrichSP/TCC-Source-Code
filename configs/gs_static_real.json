@@ -1,0 +1,7 @@
+{
+  "gs_repo_path": "./third_party/gaussian_splatting",
+  "python_executable": "python",
+  "gs_eval_split": "test",
+  "gs_train_args": "--iterations 7000",
+  "gs_render_args": "--skip_train"
+}

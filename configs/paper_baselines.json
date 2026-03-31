@@ -1,0 +1,73 @@
+{
+  "description": "Valores de referência reportados nos artigos originais para comparação com resultados do benchmark.",
+  "baselines": {
+    "nerf_static": {
+      "paper": "Mildenhall et al., NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis (ECCV 2020)",
+      "arxiv": "https://arxiv.org/abs/2003.08934",
+      "dataset": "blender_synthetic",
+      "scenes": {
+        "lego": {"psnr": 32.54, "ssim": 0.961, "lpips": 0.050},
+        "chair": {"psnr": 33.00, "ssim": 0.967, "lpips": 0.046},
+        "drums": {"psnr": 25.01, "ssim": 0.925, "lpips": 0.091},
+        "ficus": {"psnr": 30.13, "ssim": 0.964, "lpips": 0.044},
+        "hotdog": {"psnr": 36.18, "ssim": 0.974, "lpips": 0.121},
+        "materials": {"psnr": 29.62, "ssim": 0.949, "lpips": 0.063},
+        "mic": {"psnr": 32.91, "ssim": 0.980, "lpips": 0.028},
+        "ship": {"psnr": 28.65, "ssim": 0.856, "lpips": 0.206}
+      },
+      "average": {"psnr": 31.01, "ssim": 0.947, "lpips": null},
+      "notes": "Valores do paper original + Mip-NeRF baseline table para LPIPS por cena"
+    },
+    "nerf_dynamic": {
+      "paper": "Pumarola et al., D-NeRF: Neural Radiance Fields for Dynamic Scenes (CVPR 2021)",
+      "arxiv": "https://arxiv.org/abs/2011.13961",
+      "dataset": "d_nerf",
+      "scenes": {
+        "bouncing_balls": {"psnr": 38.93, "ssim": 0.988, "lpips": 0.020},
+        "hell_warrior": {"psnr": 25.02, "ssim": 0.951, "lpips": 0.070},
+        "hook": {"psnr": 29.25, "ssim": 0.968, "lpips": 0.054},
+        "jumping_jacks": {"psnr": 32.80, "ssim": 0.983, "lpips": 0.029},
+        "lego": {"psnr": 21.64, "ssim": 0.830, "lpips": 0.158},
+        "mutant": {"psnr": 31.29, "ssim": 0.975, "lpips": 0.033},
+        "stand_up": {"psnr": 32.79, "ssim": 0.984, "lpips": 0.025},
+        "t_rex": {"psnr": 31.75, "ssim": 0.976, "lpips": 0.037}
+      },
+      "average": {"psnr": 30.50, "ssim": 0.957, "lpips": 0.053},
+      "notes": "Valores reportados na Table 1 do paper original"
+    },
+    "gs_static": {
+      "paper": "Kerbl et al., 3D Gaussian Splatting for Real-Time Radiance Field Rendering (SIGGRAPH 2023)",
+      "arxiv": "https://arxiv.org/abs/2308.04079",
+      "dataset": "blender_synthetic",
+      "scenes": {
+        "lego": {"psnr": 35.78, "ssim": 0.983, "lpips": 0.019},
+        "chair": {"psnr": 35.83, "ssim": 0.987, "lpips": 0.012},
+        "drums": {"psnr": 26.15, "ssim": 0.953, "lpips": 0.042},
+        "ficus": {"psnr": 34.87, "ssim": 0.985, "lpips": 0.012},
+        "hotdog": {"psnr": 37.72, "ssim": 0.984, "lpips": 0.023},
+        "materials": {"psnr": 30.00, "ssim": 0.960, "lpips": 0.035},
+        "mic": {"psnr": 35.36, "ssim": 0.990, "lpips": 0.008},
+        "ship": {"psnr": 30.80, "ssim": 0.902, "lpips": 0.107}
+      },
+      "average": {"psnr": 33.32, "ssim": 0.968, "lpips": 0.032},
+      "notes": "Valores de 30K iterações (paper Table 1)"
+    },
+    "gs_dynamic": {
+      "paper": "Wu et al., 4D Gaussian Splatting for Real-Time Dynamic Scene Rendering (CVPR 2024)",
+      "arxiv": "https://arxiv.org/abs/2310.08528",
+      "dataset": "d_nerf",
+      "scenes": {
+        "bouncing_balls": {"psnr": 40.14, "ssim": 0.994, "lpips": 0.015},
+        "hell_warrior": {"psnr": 28.15, "ssim": 0.964, "lpips": 0.047},
+        "hook": {"psnr": 31.55, "ssim": 0.975, "lpips": 0.034},
+        "jumping_jacks": {"psnr": 35.02, "ssim": 0.988, "lpips": 0.017},
+        "lego": {"psnr": 25.78, "ssim": 0.958, "lpips": 0.043},
+        "mutant": {"psnr": 33.40, "ssim": 0.983, "lpips": 0.020},
+        "stand_up": {"psnr": 35.05, "ssim": 0.989, "lpips": 0.015},
+        "t_rex": {"psnr": 33.82, "ssim": 0.982, "lpips": 0.021}
+      },
+      "average": {"psnr": 32.86, "ssim": 0.979, "lpips": 0.027},
+      "notes": "Valores reportados no paper original"
+    }
+  }
+}

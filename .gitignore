@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Build / package
+dist/
+build/
+*.egg-info/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Third-party repositories (external dependencies)
+# These are large external repos and should be cloned separately
+third_party/
+!third_party/.gitkeep
+
+# Documentation (large docs not needed in repo)
+docs/
+!docs/.gitkeep
+
+# Datasets (too large to store in git)
+# Download using scripts/download_dataset.* instead
+data/
+!data/.gitkeep
+
+# Local artifacts, logs, and results
+artifacts/
+!artifacts/.gitkeep
+logs/
+!logs/.gitkeep

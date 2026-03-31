@@ -1,0 +1,7 @@
+{
+  "gs_repo_path": "./third_party/gaussian_splatting",
+  "python_executable": "python",
+  "gs_eval_split": "test",
+  "gs_train_args": "--iterations 500 --data_device cpu --convert_SHs_python --convert_cov3D_python",
+  "gs_render_args": "--skip_train --convert_SHs_python --convert_cov3D_python"
+}
