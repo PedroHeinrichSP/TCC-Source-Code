@@ -36,6 +36,17 @@ if ! python -m pip install -e .; then
     echo "Make sure setup.py or pyproject.toml is in the project root."
     exit 1
 fi
+
+# Install/repair torchsearchsorted extension (required by D-NeRF).
+if [ -f "./third_party/d_nerf/torchsearchsorted/setup.py" ]; then
+    if ! python -c "from torchsearchsorted import searchsorted" >/dev/null 2>&1; then
+        echo "Installing torchsearchsorted extension..."
+        if ! python -m pip install --no-build-isolation -e ./third_party/d_nerf/torchsearchsorted; then
+            echo "❌ Failed to install torchsearchsorted. Ensure torch is installed in this venv."
+            exit 1
+        fi
+    fi
+fi
 echo "✓ Dependencies installed"
 
 # Passo 3: Validar a instalação
