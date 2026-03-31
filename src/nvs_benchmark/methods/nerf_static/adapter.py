@@ -312,9 +312,13 @@ class NeRFStaticAdapter:
         if custom:
             return shlex.split(custom) if isinstance(custom, str) else list(custom)
 
+        run_script = self._resolve_repo_path(config) / "run_dnerf.py"
         return [
             self._resolve_python(config),
-            "run_dnerf.py",
+            "-m",
+            "nvs_benchmark.methods.dnerf_runner",
+            "--run-script",
+            str(run_script.resolve()),
             "--config", str(config_file.resolve()),
         ]
 
@@ -324,9 +328,13 @@ class NeRFStaticAdapter:
         if custom:
             return shlex.split(custom) if isinstance(custom, str) else list(custom)
 
+        run_script = self._resolve_repo_path(config) / "run_dnerf.py"
         return [
             self._resolve_python(config),
-            "run_dnerf.py",
+            "-m",
+            "nvs_benchmark.methods.dnerf_runner",
+            "--run-script",
+            str(run_script.resolve()),
             "--config", str(config_file.resolve()),
         ]
 
