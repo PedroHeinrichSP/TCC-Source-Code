@@ -156,7 +156,8 @@ class NeRFStaticAdapter:
 
         config_file = self._generate_config_file(
             request.config,
-            logs_dir=checkpoint_dir if checkpoint_dir.is_dir() else checkpoint_dir.parent,
+            # Keep the same basedir used during training so D-NeRF can find ckpts.
+            logs_dir=output_base / "logs",
             iter_params=iter_params,
             render_only=True,
             render_test=True,
@@ -248,6 +249,16 @@ class NeRFStaticAdapter:
 
         n_iter = iter_params.get("N_iter", 1000)
 
+        # Conservative defaults to fit low-VRAM GPUs (e.g., 2GB class).
+        n_samples = int(config.extra.get("nerf_n_samples", 32))
+        n_importance = int(config.extra.get("nerf_n_importance", 0))
+        n_rand = int(config.extra.get("nerf_n_rand", 128))
+        chunk = int(config.extra.get("nerf_chunk", 1024))
+        netchunk = int(config.extra.get("nerf_netchunk", 4096))
+        precrop_iters = int(config.extra.get("nerf_precrop_iters", 0))
+        precrop_frac = float(config.extra.get("nerf_precrop_frac", 0.5))
+        half_res = bool(config.extra.get("nerf_half_res", True))
+
         lines = [
             f"expname = {exp_name}",
             f"basedir = {logs_dir.resolve()}",
@@ -262,16 +273,18 @@ class NeRFStaticAdapter:
             f"lrate_decay = {max(250, n_iter // 4)}",
             "",
             f"N_iter = {n_iter}",
-            "N_samples = 64",
-            "N_importance = 128",
-            "N_rand = 1024",
+            f"N_samples = {n_samples}",
+            f"N_importance = {n_importance}",
+            f"N_rand = {n_rand}",
+            f"chunk = {chunk}",
+            f"netchunk = {netchunk}",
             "testskip = 1",
             "",
-            "precrop_iters = 500",
+            f"precrop_iters = {precrop_iters}",
             "precrop_iters_time = 0",
-            "precrop_frac = 0.5",
+            f"precrop_frac = {precrop_frac}",
             "",
-            "half_res = True",
+            f"half_res = {str(half_res)}",
             "do_half_precision = False",
             "",
             f"i_print = {iter_params.get('i_print', 500)}",

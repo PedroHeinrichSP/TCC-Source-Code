@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SNAPSHOT_FILE="${1:-./artifacts/metrics/latest.json}"
+SNAPSHOT_FILE="${1:-artifacts/metrics/latest.json}"
 REPORT_NAME="${2:-benchmark_report}"
 OUTPUT_DIR="${3:-./artifacts/reports}"
 

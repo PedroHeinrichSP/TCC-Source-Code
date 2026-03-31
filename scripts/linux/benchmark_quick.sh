@@ -11,13 +11,24 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src"
 
-if [ -f "venv/bin/activate" ]; then
+# Preserve an already-active environment. If none is active, pick a local fallback.
+if [ -n "${VIRTUAL_ENV:-}" ]; then
+    echo "Using active virtual environment: $VIRTUAL_ENV"
+elif [ -f ".venv-mx330-311/bin/activate" ]; then
+    source .venv-mx330-311/bin/activate
+elif [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
 else
-    echo "❌ Virtual environment not found at ./venv"
-    echo "Run './scripts/setup.sh' first to create the environment."
+    echo "❌ Virtual environment not found."
+    echo "Expected one of:"
+    echo "  - active shell venv (recommended)"
+    echo "  - ./.venv-mx330-311"
+    echo "  - ./venv"
+    echo "Activate/create one and try again."
     exit 1
 fi
+
+echo "Python in use: $(python -c 'import sys; print(sys.executable)')"
 
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║              Quick Benchmark (Single Method)               ║"
@@ -28,8 +39,11 @@ echo "Dataset: $DATASET"
 echo "Scene:   $ROOT"
 echo ""
 
-# Force CPU execution to avoid unsupported GPU/CUDA combos
-export CUDA_VISIBLE_DEVICES=""
+# Optional CPU-only mode. Leave GPU enabled by default.
+if [ "${NVS_FORCE_CPU:-0}" = "1" ]; then
+    export CUDA_VISIBLE_DEVICES=""
+    echo "CPU-only mode enabled (NVS_FORCE_CPU=1)."
+fi
 
 # Resolver raiz do dataset
 if [ ! -d "$ROOT" ]; then
@@ -46,16 +60,27 @@ fi
 echo "🚀 Starting benchmark..."
 echo ""
 
-python -m nvs_benchmark.cli method-run \
-    --method "$METHOD" \
-    --dataset "$DATASET" \
-    --root "$ROOT" \
-    --split train \
-    --output-dir ./artifacts \
-    --log-dir ./logs \
-    --compute-metrics \
-    --snapshot-file ./artifacts/metrics/latest.json \
+PRESET="${NVS_PRESET:-quick}"
+CMD=(
+    python -m nvs_benchmark.cli method-run
+    --method "$METHOD"
+    --dataset "$DATASET"
+    --root "$ROOT"
+    --split train
+    --output-dir ./artifacts
+    --log-dir ./logs
+    --compute-metrics
+    --snapshot-file ./artifacts/metrics/latest.json
     --append-snapshot
+    --preset "$PRESET"
+    --adaptive-preset
+)
+
+if [ -n "${NVS_EXTRA_JSON:-}" ]; then
+    CMD+=(--extra-json "$NVS_EXTRA_JSON")
+fi
+
+"${CMD[@]}"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"

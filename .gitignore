@@ -5,6 +5,10 @@ __pycache__/
 *.pyd
 .venv/
 venv/
+.venv-mx330-311/
+venv-mx330-311/
+.venv-mx330/
+venv-mx330/
 
 # Notebooks
 .ipynb_checkpoints/
