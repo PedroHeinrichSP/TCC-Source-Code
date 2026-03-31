@@ -9,105 +9,82 @@ $ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
-function Get-VenvPython {
-    param([string]$RootPath)
-
-    $VenvPython = Join-Path $RootPath "venv\Scripts\python.exe"
-    if (-not (Test-Path $VenvPython)) {
-        throw "Virtual environment not found at '$VenvPython'."
-    }
-    return $VenvPython
-}
-
-function Invoke-Checked {
-    param(
-        [string]$Program,
-        [string[]]$CommandArgs,
-        [string]$ErrorMessage
-    )
-
-    & $Program @CommandArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "$ErrorMessage (exit=$LASTEXITCODE)"
-    }
-}
-
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "         NVS Benchmark - Environment Setup                  " -ForegroundColor Cyan
-Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║         NVS Benchmark - Environment Setup                  ║" -ForegroundColor Cyan
+Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
-# Passo 1: Criar ambiente virtual
-Write-Host "[1/3] Creating virtual environment..." -ForegroundColor Yellow
+# Step 1: Create virtual environment
+Write-Host "📦 Step 1/3: Creating virtual environment..." -ForegroundColor Yellow
 if (-not (Test-Path "venv")) {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         & py -3 -m venv venv
+    } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
+        & python3 -m venv venv
     } elseif (Get-Command python -ErrorAction SilentlyContinue) {
         & python -m venv venv
     } else {
         throw "Python launcher not found. Install Python 3.x and re-run setup."
     }
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create virtual environment (exit=$LASTEXITCODE)."
-    }
-    Write-Host "[OK] Virtual environment created" -ForegroundColor Green
+    Write-Host "✓ Virtual environment created" -ForegroundColor Green
 } else {
-    Write-Host "[OK] Virtual environment already exists" -ForegroundColor Green
+    Write-Host "✓ Virtual environment already exists" -ForegroundColor Green
 }
 
-# Passo 2: Instalar dependências
+# Activate venv
+& ".\venv\Scripts\Activate.ps1"
+
+# Step 2: Install dependencies
 Write-Host ""
-Write-Host "[2/3] Installing dependencies..." -ForegroundColor Yellow
-$PythonExe = Get-VenvPython -RootPath $ProjectRoot
-Write-Host "[info] Python interpreter: $PythonExe" -ForegroundColor Yellow
+Write-Host "📥 Step 2/3: Installing dependencies..." -ForegroundColor Yellow
 
-Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "pip", "install", "--upgrade", "pip") -ErrorMessage "Failed to upgrade pip"
-Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "pip", "install", "-e", ".") -ErrorMessage "Failed to install project in editable mode"
-Write-Host "[OK] Dependencies installed" -ForegroundColor Green
-
-# Passo 3: Validar a instalação
-Write-Host ""
-Write-Host "[3/3] Validating installation..." -ForegroundColor Yellow
-
-$ExpectedPackagePaths = @(
-    "src\nvs_benchmark\__init__.py",
-    "src\nvs_benchmark\data\__init__.py",
-    "src\nvs_benchmark\core\__init__.py"
-)
-
-foreach ($relPath in $ExpectedPackagePaths) {
-    if (-not (Test-Path (Join-Path $ProjectRoot $relPath))) {
-        throw "Repository appears incomplete: missing '$relPath'. Re-clone or sync this workspace before running setup."
-    }
+if (-not (& python -m pip install --upgrade pip)) {
+    throw "Failed to upgrade pip"
 }
 
-Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "nvs_benchmark.cli", "status") -ErrorMessage "Setup validation failed"
-Write-Host "[OK] Setup validated" -ForegroundColor Green
+if (-not (& python -m pip install -e .)) {
+    throw "Failed to install nvs_benchmark package. Make sure pyproject.toml is in the project root."
+}
 
-# Opcional: Baixar dataset
+Write-Host "✓ Dependencies installed" -ForegroundColor Green
+
+# Step 3: Validate installation
+Write-Host ""
+Write-Host "✔️  Step 3/3: Validating installation..." -ForegroundColor Yellow
+
+if (-not (& python -m nvs_benchmark.cli status)) {
+    throw "Failed to validate nvs_benchmark installation"
+}
+
+Write-Host "✓ Setup validated" -ForegroundColor Green
+
+# Optional: Download dataset
 if (-not $SkipDataset) {
     Write-Host ""
-    Write-Host "Would you like to download a dataset for benchmarking?" -ForegroundColor Cyan
+    Write-Host "📊 Would you like to download a dataset for benchmarking?" -ForegroundColor Cyan
     $response = Read-Host "Download blender_synthetic (500MB) now? (yes/no)"
     
     if ($response -eq "yes" -or $response -eq "y") {
         Write-Host ""
-        & $PythonExe -m nvs_benchmark.cli install `
+        & python -m nvs_benchmark.cli install `
             --catalog-file ./configs/install_catalog.json `
             --only datasets `
             --execute
-        Write-Host "[OK] Dataset downloaded successfully" -ForegroundColor Green
+        
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dataset download failed"
+        }
+        Write-Host "✓ Dataset downloaded successfully" -ForegroundColor Green
     }
 }
 
 Write-Host ""
-Write-Host "===========================================================" -ForegroundColor Green
-Write-Host "Setup complete!" -ForegroundColor Green
-Write-Host "===========================================================" -ForegroundColor Green
+Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "✅ Setup complete!" -ForegroundColor Green
+Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  1. Run a quick benchmark:    ./scripts/windows/powershell/benchmark_quick.ps1" -ForegroundColor Cyan
-Write-Host "  2. View 3D results:          ./scripts/windows/powershell/preview.ps1" -ForegroundColor Cyan
-Write-Host "  3. Generate HTML report:     ./scripts/windows/powershell/generate_report.ps1" -ForegroundColor Cyan
+Write-Host "  1. Run a quick benchmark:    .\scripts\windows\powershell\benchmark_quick.ps1" -ForegroundColor Cyan
+Write-Host "  2. View 3D results:          .\scripts\windows\powershell\preview.ps1" -ForegroundColor Cyan
+Write-Host "  3. Generate HTML report:     .\scripts\windows\powershell\generate_report.ps1" -ForegroundColor Cyan
 Write-Host ""

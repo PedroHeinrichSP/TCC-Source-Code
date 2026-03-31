@@ -1,40 +1,43 @@
 param(
-    [string]$UiHost = "127.0.0.1",
+    [string]$Host = "127.0.0.1",
     [int]$Port = 8765,
-    [string]$MetricsFile = "./artifacts/metrics/latest_preview.json",
-    [string]$SceneTransformsFile = "./data/blender_synthetic/nerf_synthetic/lego/transforms_train.json",
-    [string]$InstallCatalogFile = "./configs/install_catalog.json",
-    [switch]$NoBrowser
+    [string]$MetricsFile = "./artifacts/metrics/latest.json",
+    [string]$SceneFile = "./data/blender_synthetic/nerf_synthetic/lego/transforms_train.json"
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$WindowsDir = Split-Path -Parent $ScriptDir
-$ScriptsDir = Split-Path -Parent $WindowsDir
-$ProjectRoot = Split-Path -Parent $ScriptsDir
+$ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "../../..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
-function Get-VenvPython {
-    param([string]$RootPath)
-
-    $VenvPython = Join-Path $RootPath "venv\Scripts\python.exe"
-    if (-not (Test-Path $VenvPython)) {
-        throw "Virtual environment not found at '$VenvPython'. Run './scripts/windows/powershell/setup.ps1' first."
-    }
-    return $VenvPython
+# Venv detection
+if ($env:VIRTUAL_ENV) {
+    Write-Host "Using active virtual environment: $env:VIRTUAL_ENV" -ForegroundColor Green
+} elseif (Test-Path ".venv-mx330-311\Scripts\activate.ps1") {
+    & ".venv-mx330-311\Scripts\Activate.ps1"
+} elseif (Test-Path "venv\Scripts\activate.ps1") {
+    & "venv\Scripts\Activate.ps1"
+} else {
+    Write-Host "❌ Virtual environment not found." -ForegroundColor Red
+    Write-Host "Expected one of:" -ForegroundColor Red
+    Write-Host "  - active shell venv (recommended)" -ForegroundColor Red
+    Write-Host "  - ./.venv-mx330-311" -ForegroundColor Red
+    Write-Host "  - ./venv" -ForegroundColor Red
+    exit 1
 }
 
-$PythonExe = Get-VenvPython -RootPath $ProjectRoot
+$PythonExe = python -c "import sys; sys.stdout.write(sys.executable)" 2>$null
+Write-Host "Python in use: $PythonExe" -ForegroundColor Green
 
-# Se estiver no default latest_preview, prioriza snapshots nao-smoke quando disponiveis.
-if ($MetricsFile -eq "./artifacts/metrics/latest_preview.json") {
+# Prefer non-smoke snapshots if default metrics file
+if ($MetricsFile -eq "./artifacts/metrics/latest.json") {
     $metricsCandidates = @(
         "./artifacts/metrics/dev_method_run_snapshot.json",
         "./artifacts/metrics/lego_preliminar.json",
         "./artifacts/metrics/lego_preliminar_cpu.json",
-        "./artifacts/metrics/latest_preview.json"
+        "./artifacts/metrics/latest.json"
     )
     foreach ($candidate in $metricsCandidates) {
         if (Test-Path $candidate) {
@@ -45,38 +48,41 @@ if ($MetricsFile -eq "./artifacts/metrics/latest_preview.json") {
 }
 
 $sceneCandidates = @(
-    $SceneTransformsFile,
+    $SceneFile,
     "./data/blender_synthetic/nerf_synthetic/lego/transforms_train.json",
     "./data/blender_synthetic/lego/lego/transforms_train.json"
 )
-$ResolvedSceneTransformsFile = $null
+
+$ResolvedSceneFile = $null
 foreach ($candidate in $sceneCandidates) {
     if (Test-Path $candidate) {
-        $ResolvedSceneTransformsFile = $candidate
+        $ResolvedSceneFile = $candidate
         break
     }
 }
 
-if (-not $ResolvedSceneTransformsFile) {
-    throw "Cena real nao encontrada. Execute: powershell -ExecutionPolicy Bypass -File ./scripts/windows/powershell/setup_lego.ps1"
+if (-not $ResolvedSceneFile) {
+    Write-Host "Scene not found. Execute setup or install Blender Synthetic in ./data/blender_synthetic." -ForegroundColor Red
+    exit 1
 }
 
-# Converter caminhos para absolutos para evitar problemas com diretório de trabalho
+# Convert paths to absolute to avoid working directory issues
 $AbsMetricsFile = (Resolve-Path $MetricsFile).Path
-$AbsSceneTransformsFile = (Resolve-Path $ResolvedSceneTransformsFile).Path
-$AbsInstallCatalogFile = (Resolve-Path $InstallCatalogFile).Path
+$AbsSceneFile = (Resolve-Path $ResolvedSceneFile).Path
+$AbsCatalogFile = (Resolve-Path "./configs/install_catalog.json").Path
 
-$args = @(
+Write-Host "📊 UI Preview Configuration" -ForegroundColor Cyan
+Write-Host "  Metrics File: $AbsMetricsFile" -ForegroundColor Yellow
+Write-Host "  Scene File:   $AbsSceneFile" -ForegroundColor Yellow
+Write-Host ""
+
+$cmdArgs = @(
     "-m", "nvs_benchmark.cli", "ui-preview",
-    "--host", $UiHost,
+    "--host", $Host,
     "--port", $Port,
     "--metrics-file", $AbsMetricsFile,
-    "--scene-transforms-file", $AbsSceneTransformsFile,
-    "--install-catalog-file", $AbsInstallCatalogFile
+    "--scene-transforms-file", $AbsSceneFile,
+    "--install-catalog-file", $AbsCatalogFile
 )
 
-if ($NoBrowser) {
-    $args += "--no-browser"
-}
-
-& $PythonExe @args
+python @cmdArgs

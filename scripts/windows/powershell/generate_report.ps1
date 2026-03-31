@@ -1,38 +1,44 @@
 param(
-    [string]$SnapshotFile = "./artifacts/metrics/latest.json",
+    [string]$SnapshotFile = "artifacts/metrics/latest.json",
     [string]$ReportName = "benchmark_report",
-    [string]$OutputDir = "./artifacts/reports",
-    [switch]$NoPdf
+    [string]$OutputDir = "./artifacts/reports"
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
+$ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "../../..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
-function Get-VenvPython {
-    param([string]$RootPath)
-
-    $VenvPython = Join-Path $RootPath "venv\Scripts\python.exe"
-    if (-not (Test-Path $VenvPython)) {
-        throw "Virtual environment not found at '$VenvPython'. Run './scripts/windows/powershell/setup.ps1' first."
-    }
-    return $VenvPython
+# Venv detection
+if ($env:VIRTUAL_ENV) {
+    Write-Host "Using active virtual environment: $env:VIRTUAL_ENV" -ForegroundColor Green
+} elseif (Test-Path ".venv-mx330-311\Scripts\activate.ps1") {
+    & ".venv-mx330-311\Scripts\Activate.ps1"
+} elseif (Test-Path "venv\Scripts\activate.ps1") {
+    & "venv\Scripts\Activate.ps1"
+} else {
+    Write-Host "❌ Virtual environment not found." -ForegroundColor Red
+    Write-Host "Expected one of:" -ForegroundColor Red
+    Write-Host "  - active shell venv (recommended)" -ForegroundColor Red
+    Write-Host "  - ./.venv-mx330-311" -ForegroundColor Red
+    Write-Host "  - ./venv" -ForegroundColor Red
+    exit 1
 }
 
-$PythonExe = Get-VenvPython -RootPath $ProjectRoot
+$PythonExe = python -c "import sys; sys.stdout.write(sys.executable)" 2>$null
+Write-Host "Python in use: $PythonExe" -ForegroundColor Green
 
 Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║                Generate HTML Report                        ║" -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Python: $PythonExe" -ForegroundColor Yellow
-Write-Host ""
 
 if (-not (Test-Path $SnapshotFile)) {
-    throw "Metrics file not found: $SnapshotFile`nRun a benchmark first with: ./scripts/windows/powershell/benchmark_quick.ps1"
+    Write-Host "Metrics file not found: $SnapshotFile" -ForegroundColor Red
+    Write-Host "Run a benchmark first with: .\scripts\windows\powershell\benchmark_quick.ps1" -ForegroundColor Red
+    exit 1
 }
 
 Write-Host "📊 Generating report from metrics..." -ForegroundColor Green
@@ -41,19 +47,12 @@ Write-Host "Input:  $SnapshotFile" -ForegroundColor Yellow
 Write-Host "Output: $OutputDir/$ReportName.html" -ForegroundColor Yellow
 Write-Host ""
 
-$reportArgs = @(
-    "-m", "nvs_benchmark.cli", "report-generate",
-    "--snapshot-file", $SnapshotFile,
-    "--output-dir", $OutputDir,
-    "--report-name", $ReportName,
-    "--log-dir", "./logs"
-)
-
-if ($NoPdf) {
-    $reportArgs += "--no-pdf"
-}
-
-& $PythonExe @reportArgs
+python -m nvs_benchmark.cli report-generate `
+    --snapshot-file $SnapshotFile `
+    --output-dir $OutputDir `
+    --report-name $ReportName `
+    --log-dir ./logs `
+    --no-pdf
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
@@ -65,14 +64,16 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "   $OutputDir/$ReportName.html" -ForegroundColor Cyan
     Write-Host ""
     
-    # Tentar abrir no navegador padrão
+    # Try to open in browser
     try {
         $ReportPath = (Get-Item "$OutputDir/$ReportName.html").FullName
-        & powershell -NoProfile -Command "Start-Process '$ReportPath'"
+        Start-Process $ReportPath
         Write-Host "🌐 Opening report in browser..." -ForegroundColor Yellow
     } catch {
         Write-Host "💡 Open manually: $OutputDir/$ReportName.html" -ForegroundColor Cyan
     }
+    Write-Host ""
 } else {
-    throw "Report generation failed"
+    Write-Host "❌ Report generation failed" -ForegroundColor Red
+    exit 1
 }
