@@ -4,13 +4,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
+export PYTHONPATH="$PROJECT_ROOT/src"
 
-if [[ -x "$PROJECT_ROOT/venv/bin/python" ]]; then
+if [[ -f "$PROJECT_ROOT/venv/bin/activate" ]]; then
+  source "$PROJECT_ROOT/venv/bin/activate"
+  PYTHON_BIN="python"
+elif [[ -x "$PROJECT_ROOT/venv/bin/python" ]]; then
   PYTHON_BIN="$PROJECT_ROOT/venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
 else
-  PYTHON_BIN="python"
+  echo "❌ No Python executable found. Virtual environment not configured." >&2
+  echo "Run './scripts/setup.sh' first to create the environment." >&2
+  exit 1
 fi
 
 HOST="${1:-127.0.0.1}"

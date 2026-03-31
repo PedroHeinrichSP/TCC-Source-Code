@@ -28,46 +28,88 @@ chmod +x *.sh
 
 ## 📋 Scripts Disponíveis
 
+### Scripts Principais
+
 | Script | Tempo | O Que Ele Faz |
 |--------|------|-------------|
-| `setup.sh` | 5 min | Instala e valida dependências |
+| `setup.sh` | 5 min | Cria venv, instala e valida dependências (3 estágios) |
+| `setup_local.sh` | 3 min | Setup minimalista sem venv (usa Python do sistema) |
 | `download_dataset.sh` | 5-10 min | Baixa datasets de benchmark |
-| `benchmark_quick.sh` | 2 min | Teste rápido em um único método |
-| `benchmark_all.sh` | 30+ min | Comparação completa entre todos os métodos |
-| `preview.sh` | - | Visualizador web 3D iterativo |
-| `generate_report.sh` | 1 min | Relatório HTML com gráficos |
+| `benchmark_quick.sh` | 2-5 min | Teste rápido em um único método (padrão: nerf_static) |
+| `benchmark_all.sh` | 30+ min | Comparação completa entre todos os 4 métodos |
+| `preview.sh` | - | Visualizador web 3D iterativo (Viser) |
+| `generate_report.sh` | 1 min | Relatório HTML com gráficos e métricas |
+| `run_ui_preview.sh` | - | Visualizador alternativo (legacy) |
+
+### Scripts Especializados de Setup
+
+| Script | O Que Ele Faz |
+|--------|-------------|
+| `setup_lego.sh` | Setup especializado para dataset Lego (3 estágios: download + validação) |
+| `setup_gs_static.sh` | Clona repositório 3D Gaussian Splatting (com fallback wget/unzip se git não disponível) |
 
 ---
 
 ## 🎯 Fluxos de Trabalho Comuns
 
-### Teste Rápido (2 minutos)
+### Teste Rápido (2-5 minutos) - Recomendado para Começar
 ```bash
 cd scripts/linux
-chmod +x *.sh
-./setup.sh              # Apenas uma vez
-./download_dataset.sh   # Apenas uma vez
-./benchmark_quick.sh
-./preview.sh
+chmod +x *.sh                # Permissão de execução (apenas 1ª vez)
+./setup.sh                   # Setup com 3 estágios (cria venv, instala, valida)
+./download_dataset.sh        # Baixa dataset Blender Synthetic (~500MB)
+./benchmark_quick.sh         # Benchmark rápido (nerf_static por padrão)
+./preview.sh                 # Visualizador 3D interativo
+```
+
+### Setup Especializado para Lego
+```bash
+./setup.sh           # Setup base
+./setup_lego.sh      # Download + validação específica de Lego (3 estágios)
+./benchmark_quick.sh nerf_static ./data/blender_synthetic/nerf_synthetic/lego
+```
+
+### Setup para Gaussian Splatting (3DGS)
+```bash
+./setup.sh               # Setup base
+./setup_gs_static.sh     # Clona repositório 3DGS (usa git ou wget/unzip)
+./benchmark_quick.sh gs_static
 ```
 
 ### Suite Completa de Benchmark (30+ minutos)
 ```bash
-cd scripts/linux
-./benchmark_all.sh      # Executa todos os 4 métodos
-./generate_report.sh    # Cria relatório em HTML
+./setup.sh           # Setup base
+./download_dataset.sh
+./benchmark_all.sh   # Executa todos os 4 métodos em sequência:
+                     #   - nerf_static
+                     #   - nerf_dynamic  
+                     #   - gs_static
+                     #   - gs_dynamic
+./generate_report.sh # Cria relatório em HTML com comparação
+./preview.sh         # Visualiza resultados
 ```
 
-### Método Customizado
+### Setup Local (sem venv, usa Python do Sistema)
 ```bash
-cd scripts/linux
-./benchmark_quick.sh nerf_dynamic    # Executa D-NeRF ao invés de NeRF
-./benchmark_quick.sh gs_static       # Executa Gaussian Splatting
+./setup_local.sh     # Install direto no Python do sistema
+./download_dataset.sh
+./benchmark_quick.sh
 ```
 
 ---
 
-## 🔧 Uso Avançado
+## � Melhorias de Robustez (v2.0)
+
+Os scripts Linux foram melhorados para:
+
+✅ **Mostrar erros reais**: `pip install` não redireciona mais stderr para `/dev/null`, então você verá mensagens de erro concretas  
+✅ **Validação de venv**: Scripts verificam se venv existe before activating, e falham com mensagem clara caso contrário  
+✅ **Tratamento de erros com `set -e`**: Todos os scripts param na primeira falha (não continuam silenciosamente)  
+✅ **Detecção automática de GPU/CUDA**: Métodos NeRF ajustam tipo de tensor (CPU vs CUDA) automaticamente  
+✅ **Fallback wget/unzip para 3DGS**: Se git não estiver instalado, `setup_gs_static.sh` usa wget/curl + unzip  
+✅ **Scripts especializados**: Agora há 4 scripts de setup especializados (setup_lego.sh, setup_gs_static.sh, setup_local.sh)  
+
+---
 
 ### Ver ajuda para um script
 ```bash

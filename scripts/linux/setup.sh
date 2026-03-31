@@ -26,14 +26,24 @@ source venv/bin/activate
 # Passo 2: Instalar dependências
 echo ""
 echo "📥 Step 2/3: Installing dependencies..."
-python -m pip install --upgrade pip > /dev/null 2>&1
-python -m pip install -e . > /dev/null 2>&1
+if ! python -m pip install --upgrade pip; then
+    echo "❌ Failed to upgrade pip"
+    exit 1
+fi
+if ! python -m pip install -e .; then
+    echo "❌ Failed to install nvs_benchmark package"
+    echo "Make sure setup.py or pyproject.toml is in the project root."
+    exit 1
+fi
 echo "✓ Dependencies installed"
 
 # Passo 3: Validar a instalação
 echo ""
 echo "✔️  Step 3/3: Validating installation..."
-python -m nvs_benchmark.cli status
+if ! python -m nvs_benchmark.cli status; then
+    echo "❌ Failed to validate nvs_benchmark installation"
+    exit 1
+fi
 echo "✓ Setup validated"
 
 # Opcional: Baixar dataset

@@ -10,7 +10,13 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src"
 
-source venv/bin/activate 2>/dev/null || true
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+else
+    echo "❌ Virtual environment not found at ./venv"
+    echo "Run './scripts/setup.sh' first to create the environment."
+    exit 1
+fi
 
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║          3D Interactive Viewer (Viser)                     ║"
