@@ -6,7 +6,8 @@ DATASET="${2:-blender_synthetic}"
 ROOT="${3:-./data/blender_synthetic/nerf_synthetic/lego}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Project root is one level above scripts/
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT/src"
 
@@ -26,6 +27,9 @@ echo "Method:  $METHOD"
 echo "Dataset: $DATASET"
 echo "Scene:   $ROOT"
 echo ""
+
+# Force CPU execution to avoid unsupported GPU/CUDA combos
+export CUDA_VISIBLE_DEVICES=""
 
 # Resolver raiz do dataset
 if [ ! -d "$ROOT" ]; then
