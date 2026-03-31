@@ -9,6 +9,19 @@ $ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
+function Invoke-Checked {
+    param(
+        [string]$Program,
+        [string[]]$CommandArgs,
+        [string]$ErrorMessage
+    )
+
+    & $Program @CommandArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "$ErrorMessage (exit=$LASTEXITCODE)"
+    }
+}
+
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "         NVS Benchmark - Environment Setup                  " -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
@@ -29,14 +42,27 @@ Write-Host "[2/3] Installing dependencies..." -ForegroundColor Yellow
 $VenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
 $PythonExe = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
 
-& $PythonExe -m pip install --upgrade pip 2>&1 | Out-Null
-& $PythonExe -m pip install -e . 2>&1 | Out-Null
+Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "pip", "install", "--upgrade", "pip") -ErrorMessage "Failed to upgrade pip"
+Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "pip", "install", "-e", ".") -ErrorMessage "Failed to install project in editable mode"
 Write-Host "[OK] Dependencies installed" -ForegroundColor Green
 
 # Passo 3: Validar a instalação
 Write-Host ""
 Write-Host "[3/3] Validating installation..." -ForegroundColor Yellow
-& $PythonExe -m nvs_benchmark.cli status
+
+$ExpectedPackagePaths = @(
+    "src\nvs_benchmark\__init__.py",
+    "src\nvs_benchmark\data\__init__.py",
+    "src\nvs_benchmark\core\__init__.py"
+)
+
+foreach ($relPath in $ExpectedPackagePaths) {
+    if (-not (Test-Path (Join-Path $ProjectRoot $relPath))) {
+        throw "Repository appears incomplete: missing '$relPath'. Re-clone or sync this workspace before running setup."
+    }
+}
+
+Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "nvs_benchmark.cli", "status") -ErrorMessage "Setup validation failed"
 Write-Host "[OK] Setup validated" -ForegroundColor Green
 
 # Opcional: Baixar dataset
