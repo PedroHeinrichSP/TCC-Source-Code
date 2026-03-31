@@ -20,7 +20,7 @@ if ($env:VIRTUAL_ENV) {
 } elseif (Test-Path "venv\Scripts\activate.ps1") {
     & "venv\Scripts\Activate.ps1"
 } else {
-    Write-Host "❌ Virtual environment not found." -ForegroundColor Red
+    Write-Host "ERROR: Virtual environment not found." -ForegroundColor Red
     Write-Host "Expected one of:" -ForegroundColor Red
     Write-Host "  - active shell venv (recommended)" -ForegroundColor Red
     Write-Host "  - ./.venv-mx330-311" -ForegroundColor Red
@@ -32,9 +32,9 @@ if ($env:VIRTUAL_ENV) {
 $PythonExe = python -c "import sys; sys.stdout.write(sys.executable)" 2>$null
 Write-Host "Python in use: $PythonExe" -ForegroundColor Green
 
-Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║              Quick Benchmark (Single Method)               ║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
+Write-Host "   Quick Benchmark (Single Method)" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Method:  $Method" -ForegroundColor Yellow
 Write-Host "Dataset: $Dataset" -ForegroundColor Yellow
@@ -49,7 +49,7 @@ if ($env:NVS_FORCE_CPU -eq "1") {
 
 # Resolve dataset path
 if (-not (Test-Path $Root)) {
-    $AltRoot = "./data/blender_synthetic/nerf_synthetic/lego"
+    $AltRoot = ".\data\blender_synthetic\nerf_synthetic\lego"
     if (Test-Path $AltRoot) {
         $Root = $AltRoot
         Write-Host "Using alternate path: $Root" -ForegroundColor Yellow
@@ -59,7 +59,7 @@ if (-not (Test-Path $Root)) {
     }
 }
 
-Write-Host "🚀 Starting benchmark..." -ForegroundColor Green
+Write-Host "Starting benchmark..." -ForegroundColor Green
 Write-Host ""
 
 $cmd = @(
@@ -81,7 +81,7 @@ if ($env:NVS_EXTRA_JSON) {
     $cmd += @("--extra-json", $env:NVS_EXTRA_JSON)
 }
 
-& $cmd
+& $cmd[0] $cmd[1..($cmd.Length-1)]
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Benchmark failed (exit=$LASTEXITCODE)" -ForegroundColor Red
@@ -89,9 +89,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "✅ Benchmark complete!" -ForegroundColor Green
-Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "====================================================" -ForegroundColor Green
+Write-Host "Benchmark complete!" -ForegroundColor Green
+Write-Host "====================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Results saved to:" -ForegroundColor Cyan
 Write-Host "  - Metrics:  ./artifacts/metrics/latest.json" -ForegroundColor Cyan

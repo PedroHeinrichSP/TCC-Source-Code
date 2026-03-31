@@ -17,11 +17,11 @@ if (-not (Test-Path $RunUiPreviewScript)) {
     exit 1
 }
 
-Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║          3D Interactive Viewer (Viser)                     ║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
+Write-Host "   3D Interactive Viewer (Viser)" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "🌐 Starting 3D viewer..." -ForegroundColor Green
+Write-Host "Starting 3D viewer..." -ForegroundColor Green
 Write-Host ""
 Write-Host "Opening browser at: http://$Host`:$Port" -ForegroundColor Yellow
 Write-Host ""

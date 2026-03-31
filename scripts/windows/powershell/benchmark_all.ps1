@@ -18,21 +18,21 @@ if ($env:VIRTUAL_ENV) {
 } elseif (Test-Path "venv\Scripts\activate.ps1") {
     & "venv\Scripts\Activate.ps1"
 } else {
-    Write-Host "❌ Virtual environment not found at ./venv" -ForegroundColor Red
+    Write-Host "ERROR: Virtual environment not found at ./venv" -ForegroundColor Red
     Write-Host "Run '.\scripts\windows\powershell\setup.ps1' first to create the environment." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║            Full Benchmark Suite (All Methods)              ║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
+Write-Host "   Full Benchmark Suite (All Methods)" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Dataset: $Dataset" -ForegroundColor Yellow
 Write-Host "Scene:   $Root" -ForegroundColor Yellow
 Write-Host ""
 
 if (-not (Test-Path $Root)) {
-    Write-Host "❌ Dataset not found at '$Root'" -ForegroundColor Red
+    Write-Host "ERROR: Dataset not found at '$Root'" -ForegroundColor Red
     Write-Host "Run '.\scripts\windows\powershell\download_dataset.ps1' first." -ForegroundColor Red
     exit 1
 }
@@ -42,13 +42,13 @@ $SnapshotFile = Join-Path $OutputDir "metrics\$ReportName.json"
 
 New-Item (Split-Path $SnapshotFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
 
-Write-Host "⏱️  Starting benchmark suite (this may take a while)..." -ForegroundColor Green
+Write-Host "Starting benchmark suite (this may take a while)..." -ForegroundColor Green
 Write-Host ""
 
 foreach ($Method in $Methods) {
-    Write-Host "────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-Host "----------------------------------------------------" -ForegroundColor Cyan
     Write-Host "Running $Method..." -ForegroundColor Yellow
-    Write-Host "────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-Host "----------------------------------------------------" -ForegroundColor Cyan
     
     python -m nvs_benchmark.cli method-run `
         --method $Method `
@@ -62,16 +62,16 @@ foreach ($Method in $Methods) {
         --append-snapshot 2>&1 | Out-Null
     
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[✓] $Method completed" -ForegroundColor Green
+        Write-Host "[OK] $Method completed" -ForegroundColor Green
     } else {
-        Write-Host "[⚠] $Method failed or skipped (possible missing GPU/dependencies)" -ForegroundColor Yellow
+        Write-Host "[WARN] $Method failed or skipped (possible missing GPU/dependencies)" -ForegroundColor Yellow
     }
     Write-Host ""
 }
 
-Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "✅ Benchmark suite complete." -ForegroundColor Green
-Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "====================================================" -ForegroundColor Green
+Write-Host "Benchmark suite complete." -ForegroundColor Green
+Write-Host "====================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Results: $SnapshotFile" -ForegroundColor Cyan
 Write-Host ""

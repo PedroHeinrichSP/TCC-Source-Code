@@ -20,7 +20,7 @@ if ($env:VIRTUAL_ENV) {
 } elseif (Test-Path "venv\Scripts\activate.ps1") {
     & "venv\Scripts\Activate.ps1"
 } else {
-    Write-Host "❌ Virtual environment not found." -ForegroundColor Red
+    Write-Host "ERROR: Virtual environment not found." -ForegroundColor Red
     Write-Host "Expected one of:" -ForegroundColor Red
     Write-Host "  - active shell venv (recommended)" -ForegroundColor Red
     Write-Host "  - ./.venv-mx330-311" -ForegroundColor Red
@@ -71,7 +71,7 @@ $AbsMetricsFile = (Resolve-Path $MetricsFile).Path
 $AbsSceneFile = (Resolve-Path $ResolvedSceneFile).Path
 $AbsCatalogFile = (Resolve-Path "./configs/install_catalog.json").Path
 
-Write-Host "📊 UI Preview Configuration" -ForegroundColor Cyan
+Write-Host "UI Preview Configuration" -ForegroundColor Cyan
 Write-Host "  Metrics File: $AbsMetricsFile" -ForegroundColor Yellow
 Write-Host "  Scene File:   $AbsSceneFile" -ForegroundColor Yellow
 Write-Host ""

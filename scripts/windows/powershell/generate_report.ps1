@@ -19,7 +19,7 @@ if ($env:VIRTUAL_ENV) {
 } elseif (Test-Path "venv\Scripts\activate.ps1") {
     & "venv\Scripts\Activate.ps1"
 } else {
-    Write-Host "❌ Virtual environment not found." -ForegroundColor Red
+    Write-Host "ERROR: Virtual environment not found." -ForegroundColor Red
     Write-Host "Expected one of:" -ForegroundColor Red
     Write-Host "  - active shell venv (recommended)" -ForegroundColor Red
     Write-Host "  - ./.venv-mx330-311" -ForegroundColor Red
@@ -30,9 +30,9 @@ if ($env:VIRTUAL_ENV) {
 $PythonExe = python -c "import sys; sys.stdout.write(sys.executable)" 2>$null
 Write-Host "Python in use: $PythonExe" -ForegroundColor Green
 
-Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                Generate HTML Report                        ║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
+Write-Host "   Generate HTML Report" -ForegroundColor Cyan
+Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host ""
 
 if (-not (Test-Path $SnapshotFile)) {
@@ -41,7 +41,7 @@ if (-not (Test-Path $SnapshotFile)) {
     exit 1
 }
 
-Write-Host "📊 Generating report from metrics..." -ForegroundColor Green
+Write-Host "Generating report from metrics..." -ForegroundColor Green
 Write-Host ""
 Write-Host "Input:  $SnapshotFile" -ForegroundColor Yellow
 Write-Host "Output: $OutputDir/$ReportName.html" -ForegroundColor Yellow
@@ -56,9 +56,9 @@ python -m nvs_benchmark.cli report-generate `
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
-    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Green
-    Write-Host "✅ Report generated successfully!" -ForegroundColor Green
-    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Green
+    Write-Host "====================================================" -ForegroundColor Green
+    Write-Host "Report generated successfully!" -ForegroundColor Green
+    Write-Host "====================================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "📄 HTML Report:" -ForegroundColor Cyan
     Write-Host "   $OutputDir/$ReportName.html" -ForegroundColor Cyan
@@ -68,12 +68,12 @@ if ($LASTEXITCODE -eq 0) {
     try {
         $ReportPath = (Get-Item "$OutputDir/$ReportName.html").FullName
         Start-Process $ReportPath
-        Write-Host "🌐 Opening report in browser..." -ForegroundColor Yellow
+        Write-Host "Opening report in browser..." -ForegroundColor Yellow
     } catch {
         Write-Host "💡 Open manually: $OutputDir/$ReportName.html" -ForegroundColor Cyan
     }
     Write-Host ""
 } else {
-    Write-Host "❌ Report generation failed" -ForegroundColor Red
+    Write-Host "ERROR: Report generation failed" -ForegroundColor Red
     exit 1
 }
