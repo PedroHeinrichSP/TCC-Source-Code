@@ -41,7 +41,7 @@ fi
 if [ -f "./third_party/d_nerf/torchsearchsorted/setup.py" ]; then
     if ! python -c "from torchsearchsorted import searchsorted" >/dev/null 2>&1; then
         echo "Installing torchsearchsorted extension..."
-        if ! python -m pip install --no-build-isolation -e ./third_party/d_nerf/torchsearchsorted; then
+        if ! python -m pip install --no-build-isolation --no-use-pep517 -e ./third_party/d_nerf/torchsearchsorted; then
             echo "❌ Failed to install torchsearchsorted. Ensure torch is installed in this venv."
             exit 1
         fi

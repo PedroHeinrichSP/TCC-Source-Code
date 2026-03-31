@@ -49,10 +49,16 @@ if (-not (& python -m pip install -e .)) {
 # Install/repair torchsearchsorted extension (required by D-NeRF).
 $TorchSearchsortedSetup = Join-Path $ProjectRoot "third_party\d_nerf\torchsearchsorted\setup.py"
 if (Test-Path $TorchSearchsortedSetup) {
-    & python -c "from torchsearchsorted import searchsorted" 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $importOk = $false
+    try {
+        & python -c "from torchsearchsorted import searchsorted" *> $null
+        $importOk = ($LASTEXITCODE -eq 0)
+    } catch {
+        $importOk = $false
+    }
+    if (-not $importOk) {
         Write-Host "Installing torchsearchsorted extension..." -ForegroundColor Yellow
-        if (-not (& python -m pip install --no-build-isolation -e ./third_party/d_nerf/torchsearchsorted)) {
+        if (-not (& python -m pip install --no-build-isolation --no-use-pep517 -e ./third_party/d_nerf/torchsearchsorted)) {
             throw "Failed to install torchsearchsorted. Ensure torch is installed in this venv."
         }
     }
