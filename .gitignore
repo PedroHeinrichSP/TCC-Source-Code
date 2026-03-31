@@ -36,9 +36,13 @@ docs/
 # Download using scripts/download_dataset.* instead
 data/
 !data/.gitkeep
+!src/nvs_benchmark/data/
+!src/nvs_benchmark/data/.gitkeep
 
 # Local artifacts, logs, and results
 artifacts/
 !artifacts/.gitkeep
 logs/
 !logs/.gitkeep
+
+!src/nvs_benchmark/.gitkeep
