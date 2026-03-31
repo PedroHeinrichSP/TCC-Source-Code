@@ -57,14 +57,7 @@ if (Test-Path $TorchSearchsortedSetup) {
         $importOk = $false
     }
     if (-not $importOk) {
-        if ($env:NVS_BUILD_TORCHSEARCHSORTED -eq "1") {
-            Write-Host "Installing torchsearchsorted extension (forced by NVS_BUILD_TORCHSEARCHSORTED=1)..." -ForegroundColor Yellow
-            if (-not (& python -m pip install --no-build-isolation -e ./third_party/d_nerf/torchsearchsorted)) {
-                Write-Host "Could not build torchsearchsorted. Continuing with torch.searchsorted fallback." -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host "torchsearchsorted not available. Continuing with torch.searchsorted fallback." -ForegroundColor Yellow
-        }
+        Write-Host "torchsearchsorted not available. Continuing with torch.searchsorted fallback." -ForegroundColor Yellow
     }
 }
 
