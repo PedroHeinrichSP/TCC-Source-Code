@@ -9,6 +9,16 @@ $ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
+function Get-VenvPython {
+    param([string]$RootPath)
+
+    $VenvPython = Join-Path $RootPath "venv\Scripts\python.exe"
+    if (-not (Test-Path $VenvPython)) {
+        throw "Virtual environment not found at '$VenvPython'."
+    }
+    return $VenvPython
+}
+
 function Invoke-Checked {
     param(
         [string]$Program,
@@ -30,7 +40,17 @@ Write-Host ""
 # Passo 1: Criar ambiente virtual
 Write-Host "[1/3] Creating virtual environment..." -ForegroundColor Yellow
 if (-not (Test-Path "venv")) {
-    python -m venv venv
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        & py -3 -m venv venv
+    } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+        & python -m venv venv
+    } else {
+        throw "Python launcher not found. Install Python 3.x and re-run setup."
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create virtual environment (exit=$LASTEXITCODE)."
+    }
     Write-Host "[OK] Virtual environment created" -ForegroundColor Green
 } else {
     Write-Host "[OK] Virtual environment already exists" -ForegroundColor Green
@@ -39,8 +59,8 @@ if (-not (Test-Path "venv")) {
 # Passo 2: Instalar dependências
 Write-Host ""
 Write-Host "[2/3] Installing dependencies..." -ForegroundColor Yellow
-$VenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
-$PythonExe = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+$PythonExe = Get-VenvPython -RootPath $ProjectRoot
+Write-Host "[info] Python interpreter: $PythonExe" -ForegroundColor Yellow
 
 Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "pip", "install", "--upgrade", "pip") -ErrorMessage "Failed to upgrade pip"
 Invoke-Checked -Program $PythonExe -CommandArgs @("-m", "pip", "install", "-e", ".") -ErrorMessage "Failed to install project in editable mode"

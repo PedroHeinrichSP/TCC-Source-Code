@@ -39,6 +39,7 @@ Write-Host ""
 
 # Reusa o script robusto com detecção de cena real e parâmetros completos.
 $childArgs = @(
+    "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", $RunUiPreviewScript,
     "-UiHost", $UiHost,

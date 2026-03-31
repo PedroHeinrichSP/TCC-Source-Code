@@ -12,8 +12,17 @@ $ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
-$VenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
-$PythonExe = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+function Get-VenvPython {
+    param([string]$RootPath)
+
+    $VenvPython = Join-Path $RootPath "venv\Scripts\python.exe"
+    if (-not (Test-Path $VenvPython)) {
+        throw "Virtual environment not found at '$VenvPython'. Run './scripts/windows/powershell/setup.ps1' first."
+    }
+    return $VenvPython
+}
+
+$PythonExe = Get-VenvPython -RootPath $ProjectRoot
 
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "Full Benchmark Suite (All Methods)" -ForegroundColor Cyan
@@ -21,6 +30,7 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 Write-Host "Dataset: $Dataset" -ForegroundColor Yellow
 Write-Host "Scene:   $Root" -ForegroundColor Yellow
+Write-Host "Python:  $PythonExe" -ForegroundColor Yellow
 Write-Host ""
 
 if (-not (Test-Path $Root)) {
@@ -40,19 +50,20 @@ foreach ($Method in $Methods) {
     Write-Host "Running $Method..." -ForegroundColor Yellow
     Write-Host "------------------------------------------------------------" -ForegroundColor Cyan
 
-    try {
-        & $PythonExe -m nvs_benchmark.cli method-run `
-            --method $Method `
-            --dataset $Dataset `
-            --root $Root `
-            --split train `
-            --output-dir $OutputDir `
-            --log-dir ./logs `
-            --compute-metrics `
-            --snapshot-file $SnapshotFile `
-            --append-snapshot
+    & $PythonExe -m nvs_benchmark.cli method-run `
+        --method $Method `
+        --dataset $Dataset `
+        --root $Root `
+        --split train `
+        --output-dir $OutputDir `
+        --log-dir ./logs `
+        --compute-metrics `
+        --snapshot-file $SnapshotFile `
+        --append-snapshot
+
+    if ($LASTEXITCODE -eq 0) {
         Write-Host "[ok] $Method completed" -ForegroundColor Green
-    } catch {
+    } else {
         Write-Host "[warn] $Method failed or skipped (possible missing GPU support)." -ForegroundColor Yellow
     }
     Write-Host ""

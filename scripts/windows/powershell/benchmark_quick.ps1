@@ -13,8 +13,17 @@ $ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
 Set-Location $ProjectRoot
 $env:PYTHONPATH = "$ProjectRoot\src"
 
-$VenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
-$PythonExe = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+function Get-VenvPython {
+    param([string]$RootPath)
+
+    $VenvPython = Join-Path $RootPath "venv\Scripts\python.exe"
+    if (-not (Test-Path $VenvPython)) {
+        throw "Virtual environment not found at '$VenvPython'. Run './scripts/windows/powershell/setup.ps1' first."
+    }
+    return $VenvPython
+}
+
+$PythonExe = Get-VenvPython -RootPath $ProjectRoot
 
 function Test-CudaAvailable {
     param([string]$PythonPath)
@@ -33,6 +42,7 @@ Write-Host ""
 Write-Host "Method:  $Method" -ForegroundColor Yellow
 Write-Host "Dataset: $Dataset" -ForegroundColor Yellow
 Write-Host "Scene:   $Root" -ForegroundColor Yellow
+Write-Host "Python:  $PythonExe" -ForegroundColor Yellow
 Write-Host ""
 
 # Resolver a raiz do dataset
