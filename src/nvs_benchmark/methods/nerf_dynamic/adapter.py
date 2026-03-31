@@ -314,6 +314,18 @@ class NeRFDynamicAdapter:
     def _build_env(self, config: RunConfig) -> dict[str, str]:
         """Monta variáveis de ambiente para o subprocess."""
         env = os.environ.copy()
+        
+        # Adicionar repositório ao PYTHONPATH para que submódulos locais (ex: torchsearchsorted) 
+        # sejam descobertos quando o subprocess roda dentro do d_nerf.
+        repo_path = str(self._resolve_repo_path(config).resolve())
+        pythonpath = env.get("PYTHONPATH", "")
+        if repo_path not in pythonpath:
+            if pythonpath:
+                pythonpath = f"{repo_path}{os.pathsep}{pythonpath}"
+            else:
+                pythonpath = repo_path
+            env["PYTHONPATH"] = pythonpath
+        
         env.update({
             "NVS_DATASET_ROOT": str(Path(config.dataset.root).resolve()),
             "NVS_OUTPUT_DIR": str(Path(config.output_dir).resolve()),
