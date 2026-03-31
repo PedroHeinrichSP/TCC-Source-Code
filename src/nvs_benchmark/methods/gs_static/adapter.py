@@ -240,15 +240,15 @@ class GSStaticAdapter:
     ) -> dict[str, str]:
         env = os.environ.copy()
         
-        # Adicionar repositório ao PYTHONPATH para que submódulos locais 
-        # sejam descobertos quando o subprocess roda dentro do gs_splatting.
-        repo_path = str(self._resolve_repo_path(config).resolve())
+        # Adicionar raiz do projeto ao PYTHONPATH para que submódulos locais 
+        # sejam descobertos quando o subprocess roda. Usa a raiz do projeto (não gs_splatting directory).
+        project_root = str(self._resolve_repo_path(config).parent.parent.resolve())
         pythonpath = env.get("PYTHONPATH", "")
-        if repo_path not in pythonpath:
+        if project_root not in pythonpath:
             if pythonpath:
-                pythonpath = f"{repo_path}{os.pathsep}{pythonpath}"
+                pythonpath = f"{project_root}{os.pathsep}{pythonpath}"
             else:
-                pythonpath = repo_path
+                pythonpath = project_root
             env["PYTHONPATH"] = pythonpath
         
         env.update(
