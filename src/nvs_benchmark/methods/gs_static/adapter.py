@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -41,7 +42,7 @@ class GSStaticAdapter:
     )
     base_repo_url: str = "https://github.com/graphdeco-inria/gaussian-splatting"
     repo_path: str = "./third_party/gaussian_splatting"
-    python_executable: str = "python"
+    python_executable: str = sys.executable
 
     def validate_config(self, config: RunConfig) -> None:
         """Valida configuração mínima para 3DGS estático."""
@@ -168,7 +169,8 @@ class GSStaticAdapter:
 
     def _resolve_python(self, config: RunConfig) -> str:
         configured = config.extra.get("python_executable", self.python_executable)
-        return str(configured)
+        resolved = str(configured).strip() if configured is not None else ""
+        return resolved or sys.executable
 
     def _normalize_command(self, value: object | None) -> list[str] | None:
         if value is None:

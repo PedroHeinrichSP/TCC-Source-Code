@@ -16,4 +16,5 @@ rich>=13.7
 tensorboard>=2.16
 opencv-python>=4.10
 configargparse>=1.7
+imageio>=2.34
 imageio-ffmpeg>=0.6

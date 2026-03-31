@@ -13,6 +13,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -57,7 +58,7 @@ class NeRFStaticAdapter:
     )
     base_repo_url: str = "https://github.com/albertpumarola/D-NeRF"
     repo_path: str = "./third_party/d_nerf"
-    python_executable: str = "python"
+    python_executable: str = field(default_factory=lambda: sys.executable)
 
     _last_train_seconds: float = field(default=0.0, init=False, repr=False)
     _last_infer_seconds: float = field(default=0.0, init=False, repr=False)
@@ -229,7 +230,8 @@ class NeRFStaticAdapter:
     def _resolve_python(self, config: RunConfig) -> str:
         """Resolve executável Python."""
         configured = config.extra.get("python_executable", self.python_executable)
-        return str(configured)
+        resolved = str(configured).strip() if configured is not None else ""
+        return resolved or sys.executable
 
     def _generate_config_file(
         self,
