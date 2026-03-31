@@ -46,7 +46,7 @@ if (-not (& python -m pip install -e .)) {
     throw "Failed to install nvs_benchmark package. Make sure pyproject.toml is in the project root."
 }
 
-# Install/repair torchsearchsorted extension (required by D-NeRF).
+# torchsearchsorted is optional: this repo has fallback to torch.searchsorted in D-NeRF.
 $TorchSearchsortedSetup = Join-Path $ProjectRoot "third_party\d_nerf\torchsearchsorted\setup.py"
 if (Test-Path $TorchSearchsortedSetup) {
     $importOk = $false
@@ -57,9 +57,13 @@ if (Test-Path $TorchSearchsortedSetup) {
         $importOk = $false
     }
     if (-not $importOk) {
-        Write-Host "Installing torchsearchsorted extension..." -ForegroundColor Yellow
-        if (-not (& python -m pip install --no-build-isolation --no-use-pep517 -e ./third_party/d_nerf/torchsearchsorted)) {
-            throw "Failed to install torchsearchsorted. Ensure torch is installed in this venv."
+        if ($env:NVS_BUILD_TORCHSEARCHSORTED -eq "1") {
+            Write-Host "Installing torchsearchsorted extension (forced by NVS_BUILD_TORCHSEARCHSORTED=1)..." -ForegroundColor Yellow
+            if (-not (& python -m pip install --no-build-isolation -e ./third_party/d_nerf/torchsearchsorted)) {
+                Write-Host "Could not build torchsearchsorted. Continuing with torch.searchsorted fallback." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "torchsearchsorted not available. Continuing with torch.searchsorted fallback." -ForegroundColor Yellow
         }
     }
 }

@@ -57,15 +57,10 @@ if [ ! -d "$ROOT" ]; then
     fi
 fi
 
-# Ensure torchsearchsorted extension is available for D-NeRF.
+# torchsearchsorted is optional: D-NeRF falls back to torch.searchsorted.
 if [ -f "./third_party/d_nerf/torchsearchsorted/setup.py" ]; then
     if ! python -c "from torchsearchsorted import searchsorted" >/dev/null 2>&1; then
-        echo "Installing torchsearchsorted extension..."
-        if ! python -m pip install --no-build-isolation --no-use-pep517 -e ./third_party/d_nerf/torchsearchsorted; then
-            echo "Failed to install torchsearchsorted extension."
-            echo "Check if torch is installed in the active venv and retry."
-            exit 1
-        fi
+        echo "torchsearchsorted not available. Using torch.searchsorted fallback."
     fi
 fi
 

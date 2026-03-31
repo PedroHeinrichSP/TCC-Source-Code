@@ -37,13 +37,16 @@ if ! python -m pip install -e .; then
     exit 1
 fi
 
-# Install/repair torchsearchsorted extension (required by D-NeRF).
+# torchsearchsorted is optional: this repo has fallback to torch.searchsorted in D-NeRF.
 if [ -f "./third_party/d_nerf/torchsearchsorted/setup.py" ]; then
     if ! python -c "from torchsearchsorted import searchsorted" >/dev/null 2>&1; then
-        echo "Installing torchsearchsorted extension..."
-        if ! python -m pip install --no-build-isolation --no-use-pep517 -e ./third_party/d_nerf/torchsearchsorted; then
-            echo "❌ Failed to install torchsearchsorted. Ensure torch is installed in this venv."
-            exit 1
+        if [ "${NVS_BUILD_TORCHSEARCHSORTED:-0}" = "1" ]; then
+            echo "Installing torchsearchsorted extension (forced by NVS_BUILD_TORCHSEARCHSORTED=1)..."
+            if ! python -m pip install --no-build-isolation -e ./third_party/d_nerf/torchsearchsorted; then
+                echo "⚠ Could not build torchsearchsorted. Continuing with torch.searchsorted fallback."
+            fi
+        else
+            echo "⚠ torchsearchsorted not available. Continuing with torch.searchsorted fallback."
         fi
     fi
 fi
