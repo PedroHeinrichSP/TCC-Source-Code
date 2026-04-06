@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 import webbrowser
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +75,21 @@ DEFAULT_ASPECT = 4.0 / 3.0
 MAX_SCENE_FRUSTUM_IMAGES = 24
 VISUAL_HULL_GRID_RES = 28
 VISUAL_HULL_MAX_VIEWS = 20
+
+
+@dataclass
+class _PreviewRuntimeState:
+    server: viser.ViserServer
+    artifacts_root: Path
+    scene_transforms_file: str | None
+    scene_payload: dict
+    latest_camera: dict = field(default_factory=dict)
+    latest_client_id: int | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+_PREVIEW_RUNTIMES: dict[int, _PreviewRuntimeState] = {}
+_PREVIEW_RUNTIMES_LOCK = threading.Lock()
 
 
 def _format_metric(value: float | None, digits: int = 2) -> str:
@@ -174,6 +191,35 @@ def _camera_angle_x_from_scene(scene_transforms_file: str | None) -> float | Non
     except Exception:
         return None
     return None
+
+
+def _scene_coordinate_convention(scene_transforms_file: str | None) -> str:
+    """Resolve convention from transforms metadata: opencv (default) or opengl."""
+    if not scene_transforms_file:
+        return "opengl"
+    path = Path(scene_transforms_file)
+    if not path.exists():
+        return "opengl"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "opengl"
+    if not isinstance(payload, dict):
+        return "opengl"
+    raw = str(payload.get("coordinate_convention") or "").strip().lower()
+    if raw in {"opencv", "opengl"}:
+        return raw
+    return "opengl"
+
+
+def _matrix_pose_to_viser(matrix: np.ndarray, convention: str) -> tuple[np.ndarray, np.ndarray]:
+    """Convert matrix pose to the same frame used for frustums in Viser."""
+    rotation = matrix[:3, :3]
+    translation = matrix[:3, 3]
+    if convention == "opengl":
+        flip = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
+        return rotation @ flip, translation
+    return rotation, translation
 
 
 def _safe_matrices_from_scene(scene_transforms_file: str | None) -> list[np.ndarray]:
@@ -333,18 +379,30 @@ def _scene_frame_rgba_images(scene_transforms_file: str | None, frame_count: int
     return images[:frame_count]
 
 
-def _project_world_points_to_image(points_world: np.ndarray, c2w: np.ndarray, fov_x: float, width: int, height: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _project_world_points_to_image(
+    points_world: np.ndarray,
+    c2w: np.ndarray,
+    fov_x: float,
+    width: int,
+    height: int,
+    convention: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Projeta pontos do mundo para coordenadas de pixel no frame."""
     w2c = np.linalg.inv(c2w)
     points_h = np.concatenate([points_world, np.ones((points_world.shape[0], 1), dtype=np.float32)], axis=1)
     cam = (w2c @ points_h.T).T[:, :3]
 
-    z_forward = -cam[:, 2]
+    if convention == "opengl":
+        z_forward = -cam[:, 2]
+        y_cam = -cam[:, 1]
+    else:
+        z_forward = cam[:, 2]
+        y_cam = cam[:, 1]
     valid_z = z_forward > 1e-4
 
     focal = 0.5 * float(width) / math.tan(0.5 * float(fov_x))
     x = (cam[:, 0] / np.maximum(z_forward, 1e-6)) * focal + (float(width) * 0.5)
-    y = (-cam[:, 1] / np.maximum(z_forward, 1e-6)) * focal + (float(height) * 0.5)
+    y = (y_cam / np.maximum(z_forward, 1e-6)) * focal + (float(height) * 0.5)
 
     inside = (
         valid_z
@@ -361,6 +419,7 @@ def _build_visual_hull_point_cloud(scene_payload: dict) -> tuple[np.ndarray | No
     matrices: list[np.ndarray] = scene_payload.get("matrices", [])
     rgba_frames: list[np.ndarray | None] = scene_payload.get("frame_rgba_images", [])
     fov_x = float(scene_payload.get("fov_x", FALLBACK_FOV_X))
+    convention = str(scene_payload.get("coordinate_convention") or "opencv").strip().lower()
 
     valid_views: list[tuple[np.ndarray, np.ndarray]] = []
     for index, matrix in enumerate(matrices[:VISUAL_HULL_MAX_VIEWS]):
@@ -369,7 +428,10 @@ def _build_visual_hull_point_cloud(scene_payload: dict) -> tuple[np.ndarray | No
         rgba = rgba_frames[index]
         if rgba is None or rgba.ndim != 3 or rgba.shape[-1] < 4:
             continue
-        alpha = rgba[..., 3] > 20
+        alpha_channel = rgba[..., 3]
+        threshold = int(np.percentile(alpha_channel, 60))
+        threshold = max(14, min(threshold, 220))
+        alpha = alpha_channel >= threshold
         if int(alpha.sum()) < 50:
             continue
         valid_views.append((matrix.astype(np.float32), rgba.astype(np.uint8)))
@@ -391,7 +453,7 @@ def _build_visual_hull_point_cloud(scene_payload: dict) -> tuple[np.ndarray | No
 
     for c2w, rgba in valid_views:
         h, w = rgba.shape[:2]
-        x, y, inside = _project_world_points_to_image(points, c2w, fov_x, w, h)
+        x, y, inside = _project_world_points_to_image(points, c2w, fov_x, w, h, convention)
         visible_counts += inside.astype(np.int32)
         if not np.any(inside):
             continue
@@ -399,7 +461,8 @@ def _build_visual_hull_point_cloud(scene_payload: dict) -> tuple[np.ndarray | No
         xi = np.clip(np.round(x[inside]).astype(np.int32), 0, w - 1)
         yi = np.clip(np.round(y[inside]).astype(np.int32), 0, h - 1)
         sampled = rgba[yi, xi]
-        fg = sampled[:, 3] > 20
+        sample_threshold = max(14, int(np.percentile(sampled[:, 3], 55)))
+        fg = sampled[:, 3] >= sample_threshold
         inside_indices = np.where(inside)[0]
         fg_indices = inside_indices[fg]
         if fg_indices.size == 0:
@@ -455,6 +518,7 @@ def _synthetic_camera_matrices(count: int = 8) -> list[np.ndarray]:
 def _scene_payload(scene_transforms_file: str | None) -> dict:
     """Monta estrutura padronizada de cena com cameras reais ou contingencia."""
     matrices = _safe_matrices_from_scene(scene_transforms_file)
+    coordinate_convention = _scene_coordinate_convention(scene_transforms_file)
     used_fallback = False
     if not matrices:
         matrices = _synthetic_camera_matrices(count=8)
@@ -468,8 +532,22 @@ def _scene_payload(scene_transforms_file: str | None) -> dict:
             "matrices": matrices,
             "frame_rgba_images": frame_rgba_images,
             "fov_x": float(fov_x),
+            "coordinate_convention": coordinate_convention,
         }
     )
+    if cloud_points is None or cloud_colors is None:
+        alternate = "opencv" if coordinate_convention == "opengl" else "opengl"
+        alt_points, alt_colors = _build_visual_hull_point_cloud(
+            {
+                "matrices": matrices,
+                "frame_rgba_images": frame_rgba_images,
+                "fov_x": float(fov_x),
+                "coordinate_convention": alternate,
+            }
+        )
+        if alt_points is not None and alt_colors is not None:
+            cloud_points, cloud_colors = alt_points, alt_colors
+            coordinate_convention = alternate
     return {
         "matrices": matrices,
         "frame_images": frame_images,
@@ -481,6 +559,7 @@ def _scene_payload(scene_transforms_file: str | None) -> dict:
         "scene_source": scene_transforms_file or "(not provided)",
         "fov_x": float(fov_x),
         "aspect": DEFAULT_ASPECT,
+        "coordinate_convention": coordinate_convention,
     }
 
 
@@ -617,15 +696,12 @@ def _add_scene_frustums(server: viser.ViserServer, scene_payload: dict) -> None:
     frame_images: list[np.ndarray | None] = scene_payload.get("frame_images", [])
     fov_x = float(scene_payload["fov_x"])
     aspect = float(scene_payload["aspect"])
+    convention = str(scene_payload.get("coordinate_convention") or "opencv").strip().lower()
     fov_y = 2.0 * math.atan(math.tan(fov_x * 0.5) / aspect)
 
-    flip = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
     centers = []
     for index, matrix in enumerate(matrices):
-        rotation = matrix[:3, :3]
-        translation = matrix[:3, 3]
-        rotation_cv = flip @ rotation @ flip
-        translation_cv = flip @ translation
+        rotation_cv, translation_cv = _matrix_pose_to_viser(matrix, convention)
         centers.append(translation_cv)
         frustum_image = frame_images[index] if index < len(frame_images) else None
         server.scene.add_camera_frustum(
@@ -690,6 +766,36 @@ def run_preview_ui(
     )
 
     _add_scene_frustums(server, scene)
+
+    runtime_state = _PreviewRuntimeState(
+        server=server,
+        artifacts_root=artifacts_root,
+        scene_transforms_file=scene_transforms_file,
+        scene_payload=scene,
+    )
+    with _PREVIEW_RUNTIMES_LOCK:
+        _PREVIEW_RUNTIMES[port] = runtime_state
+
+    @server.on_client_connect
+    def _on_client_connect(client: viser.ClientHandle) -> None:
+        with runtime_state.lock:
+            runtime_state.latest_client_id = int(client.client_id)
+
+        @client.camera.on_update
+        def _on_camera_update(camera: viser.CameraHandle) -> None:
+            with runtime_state.lock:
+                runtime_state.latest_client_id = int(client.client_id)
+                runtime_state.latest_camera = {
+                    "client_id": int(client.client_id),
+                    "timestamp": float(camera.update_timestamp),
+                    "position": np.asarray(camera.position, dtype=np.float64).tolist(),
+                    "look_at": np.asarray(camera.look_at, dtype=np.float64).tolist(),
+                    "up_direction": np.asarray(camera.up_direction, dtype=np.float64).tolist(),
+                    "wxyz": np.asarray(camera.wxyz, dtype=np.float64).tolist(),
+                    "fov": float(camera.fov),
+                    "image_width": int(camera.image_width),
+                    "image_height": int(camera.image_height),
+                }
 
     if minimal:
         url = f"http://{server.get_host()}:{server.get_port()}"
@@ -915,3 +1021,137 @@ def run_preview_ui(
 
     while True:
         time.sleep(0.1)
+
+
+def get_preview_runtime_state(port: int) -> dict:
+    """Return latest camera/training-scene state from active preview runtime."""
+    with _PREVIEW_RUNTIMES_LOCK:
+        runtime = _PREVIEW_RUNTIMES.get(int(port))
+    if runtime is None:
+        return {
+            "available": False,
+            "reason": "preview-runtime-not-found",
+        }
+
+    with runtime.lock:
+        camera = dict(runtime.latest_camera)
+        scene = runtime.scene_payload
+    return {
+        "available": True,
+        "camera": camera,
+        "scene": {
+            "source": scene.get("scene_source"),
+            "camera_count": int(scene.get("camera_count") or 0),
+            "used_fallback": bool(scene.get("used_fallback")),
+            "coordinate_convention": scene.get("coordinate_convention") or "opencv",
+            "proxy_point_count": int(scene["scene_points"].shape[0]) if isinstance(scene.get("scene_points"), np.ndarray) else 0,
+        },
+    }
+
+
+def capture_preview_camera_render(
+    *,
+    port: int,
+    width: int,
+    height: int,
+    output_name: str = "live_camera_render.jpg",
+) -> dict:
+    """Capture current Viser camera viewport from the latest connected client."""
+    with _PREVIEW_RUNTIMES_LOCK:
+        runtime = _PREVIEW_RUNTIMES.get(int(port))
+    if runtime is None:
+        return {"ok": False, "error": "preview-runtime-not-found"}
+
+    clients = runtime.server.get_clients()
+    if not clients:
+        return {"ok": False, "error": "no-connected-clients"}
+
+    with runtime.lock:
+        preferred = runtime.latest_client_id
+    client = clients.get(preferred) if preferred is not None else None
+    if client is None:
+        client = next(iter(clients.values()))
+
+    safe_width = int(max(160, min(width, 1920)))
+    safe_height = int(max(120, min(height, 1080)))
+    try:
+        image = client.camera.get_render(height=safe_height, width=safe_width, transport_format="jpeg")
+    except Exception as exc:
+        return {"ok": False, "error": f"capture-failed: {exc}"}
+
+    output_dir = runtime.artifacts_root / "preview"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / output_name
+    try:
+        skio.imsave(output_path, image, check_contrast=False)
+    except Exception as exc:
+        return {"ok": False, "error": f"save-failed: {exc}"}
+
+    with runtime.lock:
+        camera = dict(runtime.latest_camera)
+
+    return {
+        "ok": True,
+        "path": str(output_path),
+        "camera": camera,
+        "width": safe_width,
+        "height": safe_height,
+    }
+
+
+def refresh_preview_scene(port: int) -> dict:
+    """Recompute scene payload and update frustums/proxy cloud in the active preview."""
+    with _PREVIEW_RUNTIMES_LOCK:
+        runtime = _PREVIEW_RUNTIMES.get(int(port))
+    if runtime is None:
+        return {"ok": False, "error": "preview-runtime-not-found"}
+
+    scene_file = runtime.scene_transforms_file
+    new_scene = _scene_payload(scene_file)
+    try:
+        _add_scene_frustums(runtime.server, new_scene)
+    except Exception as exc:
+        return {"ok": False, "error": f"scene-refresh-failed: {exc}"}
+
+    with runtime.lock:
+        runtime.scene_payload = new_scene
+
+    return {
+        "ok": True,
+        "camera_count": int(new_scene.get("camera_count") or 0),
+        "proxy_point_count": int(new_scene["scene_points"].shape[0]) if isinstance(new_scene.get("scene_points"), np.ndarray) else 0,
+        "used_fallback": bool(new_scene.get("used_fallback")),
+    }
+
+
+def nearest_scene_frame_index(port: int) -> int | None:
+    """Return nearest scene frame index to current camera in Viser coordinates."""
+    with _PREVIEW_RUNTIMES_LOCK:
+        runtime = _PREVIEW_RUNTIMES.get(int(port))
+    if runtime is None:
+        return None
+
+    with runtime.lock:
+        camera = dict(runtime.latest_camera)
+        scene = runtime.scene_payload
+
+    position = camera.get("position")
+    matrices = scene.get("matrices")
+    convention = str(scene.get("coordinate_convention") or "opengl").strip().lower()
+    if not isinstance(position, list) or len(position) != 3:
+        return None
+    if not isinstance(matrices, list) or not matrices:
+        return None
+
+    cam = np.asarray(position, dtype=np.float32)
+    best_idx = None
+    best_dist = None
+    for idx, matrix in enumerate(matrices):
+        if not isinstance(matrix, np.ndarray) or matrix.shape != (4, 4):
+            continue
+        _, center = _matrix_pose_to_viser(matrix, convention)
+        dist = float(np.linalg.norm(center.astype(np.float32) - cam))
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best_idx = idx
+    return best_idx

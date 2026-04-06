@@ -8,7 +8,7 @@ from pathlib import Path
 
 from nvs_benchmark.core import DatasetSpec
 
-SUPPORTED_DATASETS = ["blender_synthetic", "d_nerf", "custom"]
+SUPPORTED_DATASETS = ["blender_synthetic", "d_nerf", "mipnerf360", "tanks_and_temples", "custom"]
 
 
 class DatasetValidationError(ValueError):
@@ -151,13 +151,112 @@ class CustomDatasetLoader:
         return DatasetSpec(name=self.dataset_name, root=str(root_path), split=split_to_use, metadata=metadata)
 
 
-def get_loader(dataset_name: str) -> BlenderSyntheticLoader | DNeRFLoader | CustomDatasetLoader:
+@dataclass
+class MipNeRF360Loader:
+    """Carregador para o formato Mip-NeRF 360 (cenas de escala real unbounded)."""
+
+    dataset_name: str = "mipnerf360"
+
+    def validate(self, root: str | Path) -> None:
+        """Valida estrutura mínima esperada para Mip-NeRF 360."""
+        root_path = Path(root)
+        if not root_path.exists() or not root_path.is_dir():
+            raise DatasetValidationError(f"Diretorio invalido para dataset: {root_path}")
+
+        splits = _existing_splits(root_path)
+        if not splits:
+            # Formato alternativo: COLMAP sparse
+            sparse_dir = root_path / "sparse" / "0"
+            if not sparse_dir.exists():
+                raise DatasetValidationError(
+                    "Mip-NeRF 360 requer transforms_*.json ou diretorio sparse/0 (COLMAP)."
+                )
+
+    def load(self, root: str | Path, split: str = "train") -> DatasetSpec:
+        """Carrega metadados do split solicitado para Mip-NeRF 360."""
+        root_path = Path(root)
+        self.validate(root_path)
+        available = _existing_splits(root_path)
+        split_to_use = split if split in available else (available[0] if available else split)
+
+        frames = []
+        if available:
+            try:
+                transforms = _read_transforms(root_path, split_to_use)
+                frames = transforms.get("frames", [])
+            except DatasetValidationError:
+                pass
+
+        metadata = {
+            "available_splits": available,
+            "frame_count": len(frames),
+            "image_file_count": _count_image_files(root_path),
+            "format": "mipnerf360",
+            "note": "Cenas unbounded de escala real. Download: https://jonbarron.info/mipnerf360/",
+        }
+        return DatasetSpec(name=self.dataset_name, root=str(root_path), split=split_to_use, metadata=metadata)
+
+
+@dataclass
+class TanksAndTemplesLoader:
+    """Carregador para o formato Tanks and Temples (cenas de grande escala)."""
+
+    dataset_name: str = "tanks_and_temples"
+
+    def validate(self, root: str | Path) -> None:
+        """Valida estrutura mínima esperada para Tanks and Temples."""
+        root_path = Path(root)
+        if not root_path.exists() or not root_path.is_dir():
+            raise DatasetValidationError(f"Diretorio invalido para dataset: {root_path}")
+
+        splits = _existing_splits(root_path)
+        if not splits:
+            # Aceitar estrutura com poses_bounds.npy (LLFF) ou diretório images/
+            images_dir = root_path / "images"
+            poses_bounds = root_path / "poses_bounds.npy"
+            if not images_dir.exists() and not poses_bounds.exists():
+                raise DatasetValidationError(
+                    "Tanks and Temples requer transforms_*.json, images/ ou poses_bounds.npy."
+                )
+
+    def load(self, root: str | Path, split: str = "train") -> DatasetSpec:
+        """Carrega metadados do split solicitado para Tanks and Temples."""
+        root_path = Path(root)
+        self.validate(root_path)
+        available = _existing_splits(root_path)
+        split_to_use = split if split in available else (available[0] if available else split)
+
+        frames = []
+        if available:
+            try:
+                transforms = _read_transforms(root_path, split_to_use)
+                frames = transforms.get("frames", [])
+            except DatasetValidationError:
+                pass
+
+        metadata = {
+            "available_splits": available,
+            "frame_count": len(frames),
+            "image_file_count": _count_image_files(root_path),
+            "format": "tanks_and_temples",
+            "note": "Cenas de grande escala. Download: https://www.tanksandtemples.org/download/",
+        }
+        return DatasetSpec(name=self.dataset_name, root=str(root_path), split=split_to_use, metadata=metadata)
+
+
+def get_loader(
+    dataset_name: str,
+) -> BlenderSyntheticLoader | DNeRFLoader | MipNeRF360Loader | TanksAndTemplesLoader | CustomDatasetLoader:
     """Resolve o carregador adequado para um dataset suportado."""
     normalized = dataset_name.strip().lower()
     if normalized == "blender_synthetic":
         return BlenderSyntheticLoader()
     if normalized == "d_nerf":
         return DNeRFLoader()
+    if normalized in {"mipnerf360", "mip_nerf_360", "mip-nerf-360"}:
+        return MipNeRF360Loader()
+    if normalized in {"tanks_and_temples", "tanksandtemples", "tanks-and-temples"}:
+        return TanksAndTemplesLoader()
     if normalized == "custom":
         return CustomDatasetLoader()
     raise DatasetValidationError(

@@ -12,6 +12,24 @@ const taskbar = document.getElementById('taskbar');
 const primarySelect = document.getElementById('primary-method');
 const secondarySelect = document.getElementById('secondary-method');
 const renderMethodSelect = document.getElementById('render-method-select');
+const renderAtCameraBtn = document.getElementById('render-at-camera');
+const autoCameraPreviewToggle = document.getElementById('auto-camera-preview');
+const cameraPreviewModeSelect = document.getElementById('camera-preview-mode');
+const refreshPreviewStateBtn = document.getElementById('refresh-preview-state');
+const refreshSpatialPreviewBtn = document.getElementById('refresh-spatial-preview');
+const loadPreviewStateBtn = document.getElementById('load-preview-state');
+const previewStateSummary = document.getElementById('preview-state-summary');
+const fineTuneTabButtons = Array.from(document.querySelectorAll('[data-fine-tune-tab]'));
+const fineTuneTabPanels = {
+  sliders: document.getElementById('fine-tune-tab-sliders'),
+  status: document.getElementById('fine-tune-tab-status'),
+};
+const sliderRefreshInterval = document.getElementById('slider-refresh-interval');
+const sliderRefreshIntervalValue = document.getElementById('slider-refresh-interval-value');
+const sliderRenderScale = document.getElementById('slider-render-scale');
+const sliderRenderScaleValue = document.getElementById('slider-render-scale-value');
+const sliderSpatialRefresh = document.getElementById('slider-spatial-refresh');
+const sliderSpatialRefreshValue = document.getElementById('slider-spatial-refresh-value');
 const panelMethodSelect = document.getElementById('panel-method');
 const addPanelBtn = document.getElementById('add-panel');
 const loadSceneBtn = document.getElementById('load-scene');
@@ -24,6 +42,17 @@ const historyFilterMethod = document.getElementById('history-filter-method');
 const historyFilterStatus = document.getElementById('history-filter-status');
 const historyFilterDataset = document.getElementById('history-filter-dataset');
 const experimentVisuals = document.getElementById('experiment-visuals');
+const historyTabButtons = Array.from(document.querySelectorAll('.history-tab-btn'));
+const historyTabPanels = {
+  runs: document.getElementById('history-tab-runs'),
+  timeline: document.getElementById('history-tab-timeline'),
+};
+const timelineMetricSelect = document.getElementById('timeline-metric');
+const timelineMethodSelect = document.getElementById('timeline-method');
+const refreshTimelineBtn = document.getElementById('refresh-timeline');
+const timelineChart = document.getElementById('timeline-chart');
+const timelineEmpty = document.getElementById('timeline-empty');
+const timelineSummary = document.getElementById('timeline-summary');
 const sceneDatasetSelect = document.getElementById('scene-dataset');
 const sceneSplitSelect = document.getElementById('scene-split');
 const sceneFrameSelect = document.getElementById('scene-frame');
@@ -58,8 +87,31 @@ const state = {
     status: '',
     dataset: '',
   },
+  timeline: {
+    metric: 'psnr',
+    method: '',
+    points: [],
+    methods: [],
+    latest_delta: null,
+  },
   windows: {},
   zSeed: 20,
+  renderMode: 'method',
+  cameraLastTimestamp: 0,
+  cameraRenderBusy: false,
+  autoCameraPreviewEnabled: true,
+  cameraPreviewMode: 'auto',
+  tuning: {
+    refreshIntervalSec: 9,
+    renderScalePercent: 100,
+    spatialRefreshEvery: 1,
+  },
+  trainingSync: {
+    timerId: null,
+    lastRunId: '',
+    lastMetricsMtime: null,
+    tickCount: 0,
+  },
 };
 
 const WINDOW_TITLES = {
@@ -140,6 +192,29 @@ const setImageWithFallback = (img, candidates) => {
   tryNext();
 };
 
+const setFineTuneTab = (tabId) => {
+  fineTuneTabButtons.forEach((button) => {
+    const active = button.dataset.fineTuneTab === tabId;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  Object.entries(fineTuneTabPanels).forEach(([key, panel]) => {
+    if (!panel) return;
+    const active = key === tabId;
+    panel.classList.toggle('is-active', active);
+    panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+  });
+};
+
+const scaleRenderSize = (width, height) => {
+  const scale = Math.max(0.4, Math.min(1.0, Number(state.tuning.renderScalePercent) / 100.0));
+  return {
+    width: Math.max(160, Math.round(width * scale)),
+    height: Math.max(120, Math.round(height * scale)),
+  };
+};
+
 const normalizeMetricEntry = (method, payload) => {
   const data = payload && typeof payload === 'object' ? payload : {};
   return {
@@ -203,15 +278,38 @@ const updateActiveMetrics = () => {
   const secondary = secondarySelect.value;
   const primaryEntry = state.metrics[primary];
   const secondaryEntry = state.metrics[secondary];
+  const primaryPsnr = toFiniteNumber(primaryEntry?.psnr);
+  const secondaryPsnr = toFiniteNumber(secondaryEntry?.psnr);
+
+  let hint = 'Selecione dois metodos para comparar diretamente no mesmo contexto.';
+  if (primaryPsnr !== null && secondaryPsnr !== null) {
+    if (primaryPsnr > secondaryPsnr) {
+      hint = `${getMethodLabel(primary)} lidera em PSNR neste snapshot.`;
+    } else if (secondaryPsnr > primaryPsnr) {
+      hint = `${getMethodLabel(secondary)} lidera em PSNR neste snapshot.`;
+    } else {
+      hint = 'Empate em PSNR entre os dois metodos neste snapshot.';
+    }
+  }
 
   activeMetrics.innerHTML = `
     ${buildMetricsMini(`Base: ${getMethodLabel(primary)}`, primaryEntry)}
     <div class="metrics-divider"></div>
     ${buildMetricsMini(`Comparar: ${getMethodLabel(secondary)}`, secondaryEntry)}
+    <div class="metrics-inline-hint">${hint}</div>
   `;
 };
 
 const updateRender = () => {
+  if (state.renderMode === 'camera') {
+    renderStatus.textContent = 'Camera ativa: use o botao para render completo no ponto atual.';
+    return;
+  }
+
+  if (state.renderMode === 'dataset') {
+    return;
+  }
+
   const methodId = renderMethodSelect?.value || primarySelect.value;
   if (!methodId) {
     renderStatus.textContent = 'Nenhum modelo instalado.';
@@ -228,6 +326,218 @@ const updateRender = () => {
   renderFallback.textContent = 'Nenhum render disponivel para este metodo.';
   setImageWithFallback(renderImage, candidates);
   renderImage.alt = `Render ${label}`;
+};
+
+const applyTrainingStatusHint = (payload) => {
+  const latestRun = payload?.latest_run;
+  if (!latestRun || typeof latestRun !== 'object') {
+    return;
+  }
+  const runId = String(latestRun.run_id || '--');
+  const status = String(latestRun.status || 'unknown');
+  const method = String(latestRun.method || '--');
+  const shortRun = runId.length > 18 ? `${runId.slice(0, 18)}...` : runId;
+  if (state.renderMode === 'camera') {
+    renderStatus.textContent = `Camera ativa | treino: ${method} (${status}) [${shortRun}]`;
+  }
+};
+
+const renderPreviewStateSummary = (payload) => {
+  if (!previewStateSummary) return;
+  const scene = payload?.scene || {};
+  const camera = payload?.camera || {};
+  const cameraCount = Number(scene.camera_count || 0);
+  const proxyPoints = Number(scene.proxy_point_count || 0);
+  const convention = String(scene.coordinate_convention || 'opencv').toUpperCase();
+  const source = payload?.available ? 'ativo' : 'indisponivel';
+
+  previewStateSummary.innerHTML = `
+    <div class="metrics-header">Previa espacial</div>
+    <div>Estado <strong>${source}</strong></div>
+    <div>Convencao <strong>${convention}</strong></div>
+    <div>Cameras <strong>${Number.isFinite(cameraCount) ? cameraCount : 0}</strong></div>
+    <div>Proxy cloud <strong>${Number.isFinite(proxyPoints) ? proxyPoints : 0}</strong></div>
+    <div>Cliente <strong>${camera.client_id ?? '--'}</strong></div>
+  `;
+};
+
+const loadPreviewState = async () => {
+  try {
+    const response = await fetch('/api/preview-state', { cache: 'no-store' });
+    if (!response.ok) {
+      renderPreviewStateSummary({ available: false });
+      return null;
+    }
+    const payload = await response.json();
+    renderPreviewStateSummary(payload);
+    return payload;
+  } catch {
+    renderPreviewStateSummary({ available: false });
+    return null;
+  }
+};
+
+const requestCameraRender = async ({ quality = 'manual', width = 960, height = 540 } = {}) => {
+  if (state.cameraRenderBusy) return;
+  state.cameraRenderBusy = true;
+  if (renderAtCameraBtn) {
+    renderAtCameraBtn.disabled = true;
+  }
+
+  try {
+    const scaled = scaleRenderSize(width, height);
+    const response = await fetch('/api/render-camera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        quality,
+        width: scaled.width,
+        height: scaled.height,
+        method_id: renderMethodSelect?.value || primarySelect.value || '',
+        preview_mode: cameraPreviewModeSelect?.value || 'auto',
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      const reason = payload?.error || `HTTP ${response.status}`;
+      renderFallback.textContent = `Falha ao renderizar camera atual: ${reason}`;
+      renderFallback.classList.remove('hidden');
+      renderImage.classList.add('hidden');
+      return;
+    }
+
+    const imageUrl = payload.image_url;
+    if (!imageUrl) {
+      renderFallback.textContent = 'Render de camera nao retornou imagem.';
+      renderFallback.classList.remove('hidden');
+      renderImage.classList.add('hidden');
+      return;
+    }
+
+    const camera = payload.camera || {};
+    const timestamp = Number(camera.timestamp || 0);
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      state.cameraLastTimestamp = timestamp;
+    }
+
+    state.renderMode = 'camera';
+    const cacheBusted = `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`;
+    renderImage.src = cacheBusted;
+    renderImage.alt = quality === 'manual' ? 'Render no ponto atual da camera' : 'Preview automatico da camera';
+    renderFallback.textContent = 'Nao foi possivel carregar a imagem renderizada da camera.';
+    const source = payload.source === 'artifact' ? 'render de artefato' : 'fallback do Viser';
+    renderStatus.textContent = quality === 'manual'
+      ? `Render no ponto atual concluido (${source}).`
+      : `Preview automatico atualizado (${source}).`;
+  } catch {
+    renderFallback.textContent = 'Falha de rede ao renderizar camera atual.';
+    renderFallback.classList.remove('hidden');
+    renderImage.classList.add('hidden');
+  } finally {
+    state.cameraRenderBusy = false;
+    if (renderAtCameraBtn) {
+      renderAtCameraBtn.disabled = false;
+    }
+  }
+};
+
+const maybeAutoCameraPreview = async ({ force = false } = {}) => {
+  if (!state.autoCameraPreviewEnabled) return;
+  if (state.cameraRenderBusy) return;
+
+  let previewState;
+  try {
+    const response = await fetch('/api/preview-state', { cache: 'no-store' });
+    if (!response.ok) return;
+    previewState = await response.json();
+  } catch {
+    return;
+  }
+
+  if (!previewState?.available) return;
+  renderPreviewStateSummary(previewState);
+  const camera = previewState.camera || {};
+  const timestamp = Number(camera.timestamp || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return;
+  if (!force && timestamp <= state.cameraLastTimestamp) return;
+
+  await requestCameraRender({ quality: 'auto', width: 800, height: 450 });
+};
+
+const loadTrainingStatus = async () => {
+  const response = await fetch('/api/training-status', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`training-status-${response.status}`);
+  }
+  return response.json();
+};
+
+const refreshSpatialPreview = async () => {
+  try {
+    const response = await fetch('/api/preview-refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'training-sync' }),
+    });
+    if (!response.ok) {
+      return;
+    }
+    await response.json();
+  } catch {
+    // Ignore transient refresh errors.
+  }
+};
+
+const syncTrainingState = async ({ force = false } = {}) => {
+  try {
+    const payload = await loadTrainingStatus();
+    const latestRun = payload?.latest_run;
+    const runId = latestRun && typeof latestRun === 'object' ? String(latestRun.run_id || '') : '';
+    const metricsMtime = payload?.metrics_mtime ?? null;
+
+    const runChanged = runId && runId !== state.trainingSync.lastRunId;
+    const metricsChanged = force || metricsMtime !== state.trainingSync.lastMetricsMtime;
+    if (runChanged) {
+      state.trainingSync.lastRunId = runId;
+    }
+    state.trainingSync.lastMetricsMtime = metricsMtime;
+
+    applyTrainingStatusHint(payload);
+    await loadPreviewState();
+
+    state.trainingSync.tickCount += 1;
+    const shouldRefreshSpatial =
+      force ||
+      (state.trainingSync.tickCount % Math.max(1, Number(state.tuning.spatialRefreshEvery) || 1) === 0);
+
+    if (metricsChanged) {
+      const items = await loadExperiments(state.experimentsFilters);
+      state.experiments = items;
+      renderExperimentHistory();
+      populateHistoryMethodFilter();
+      await refreshTimeline();
+      if (shouldRefreshSpatial) {
+        await refreshSpatialPreview();
+      }
+    }
+
+    if (state.autoCameraPreviewEnabled && (runChanged || force)) {
+      await maybeAutoCameraPreview({ force: true });
+    }
+  } catch {
+    // Silently ignore transient sync errors.
+  }
+};
+
+const startTrainingSyncLoop = () => {
+  if (state.trainingSync.timerId) {
+    window.clearInterval(state.trainingSync.timerId);
+    state.trainingSync.timerId = null;
+  }
+  state.trainingSync.timerId = window.setInterval(() => {
+    syncTrainingState({ force: false });
+    maybeAutoCameraPreview({ force: false });
+  }, Math.max(3000, Number(state.tuning.refreshIntervalSec || 9) * 1000));
 };
 
 renderImage.addEventListener('error', () => {
@@ -336,6 +646,29 @@ const loadExperiments = async (filters = {}) => {
   return Array.isArray(payload.experiments) ? payload.experiments : [];
 };
 
+const loadTimeline = async (filters = {}) => {
+  const metric = (timelineMetricSelect?.value || 'psnr').trim();
+  const method = (timelineMethodSelect?.value || '').trim();
+  const params = new URLSearchParams();
+  params.set('metric', metric || 'psnr');
+  if (method) params.set('method', method);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.dataset) params.set('dataset', filters.dataset);
+  params.set('include_smoke', 'false');
+
+  const response = await fetch(`/api/experiments-timeline?${params.toString()}`, { cache: 'no-store' });
+  if (!response.ok) {
+    return { metric, methods: [], points: [], latest_delta: null };
+  }
+  const payload = await response.json();
+  return {
+    metric: String(payload.metric || metric),
+    methods: Array.isArray(payload.methods) ? payload.methods : [],
+    points: Array.isArray(payload.points) ? payload.points : [],
+    latest_delta: payload.latest_delta && typeof payload.latest_delta === 'object' ? payload.latest_delta : null,
+  };
+};
+
 const populateHistoryMethodFilter = () => {
   if (!historyFilterMethod) return;
   const methods = Array.from(new Set(state.experiments.map((item) => item.method).filter(Boolean)));
@@ -405,7 +738,7 @@ const renderExperimentHistory = () => {
 
   if (!state.experiments.length) {
     const row = document.createElement('tr');
-    row.innerHTML = '<td colspan="6" class="history-empty">Nenhum experimento registrado.</td>';
+    row.innerHTML = '<td colspan="6" class="history-empty">Nenhum experimento encontrado com os filtros atuais.</td>';
     historyBody.appendChild(row);
     renderExperimentVisuals();
     return;
@@ -449,6 +782,151 @@ const renderExperimentHistory = () => {
   });
 
   renderExperimentVisuals();
+};
+
+const setHistoryTab = (tabId) => {
+  historyTabButtons.forEach((button) => {
+    const active = button.dataset.historyTab === tabId;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  Object.entries(historyTabPanels).forEach(([key, panel]) => {
+    if (!panel) return;
+    const active = key === tabId;
+    panel.classList.toggle('is-active', active);
+    panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+  });
+};
+
+const populateTimelineMethodFilter = () => {
+  if (!timelineMethodSelect) return;
+  const methods = state.timeline.methods || [];
+  const previous = timelineMethodSelect.value;
+  timelineMethodSelect.innerHTML = '<option value="">Todos os metodos</option>';
+  methods.forEach((methodId) => {
+    const option = document.createElement('option');
+    option.value = methodId;
+    option.textContent = getMethodLabel(methodId);
+    timelineMethodSelect.appendChild(option);
+  });
+  if (methods.includes(previous)) {
+    timelineMethodSelect.value = previous;
+  }
+};
+
+const renderTimelineChart = () => {
+  if (!timelineChart || !timelineSummary || !timelineEmpty) return;
+  const points = Array.isArray(state.timeline.points) ? state.timeline.points : [];
+  const metricLabel = (state.timeline.metric || 'psnr').toUpperCase();
+
+  timelineChart.innerHTML = '';
+  timelineSummary.innerHTML = '';
+
+  if (points.length < 2) {
+    timelineEmpty.classList.remove('hidden');
+    timelineEmpty.textContent = 'Ainda nao ha serie suficiente. Rode experimentos em dias diferentes para ver tendencia.';
+    return;
+  }
+
+  timelineEmpty.classList.add('hidden');
+
+  const width = 760;
+  const height = 260;
+  const padding = { left: 52, right: 16, top: 18, bottom: 38 };
+  const values = points.map((item) => toFiniteNumber(item.value)).filter((value) => value !== null);
+  if (!values.length) {
+    timelineEmpty.classList.remove('hidden');
+    timelineEmpty.textContent = 'Nao foi possivel calcular valores validos para a metrica selecionada.';
+    return;
+  }
+
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (min === max) {
+    min -= 0.5;
+    max += 0.5;
+  }
+
+  const xStep = (width - padding.left - padding.right) / Math.max(points.length - 1, 1);
+  const yScale = (height - padding.top - padding.bottom) / (max - min);
+
+  const yTicks = 4;
+  for (let i = 0; i <= yTicks; i += 1) {
+    const ratio = i / yTicks;
+    const y = padding.top + (height - padding.top - padding.bottom) * ratio;
+    const value = max - (max - min) * ratio;
+    timelineChart.insertAdjacentHTML(
+      'beforeend',
+      `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="rgba(168,85,247,0.22)" stroke-width="1" />`
+    );
+    timelineChart.insertAdjacentHTML(
+      'beforeend',
+      `<text x="${padding.left - 8}" y="${y + 4}" text-anchor="end" font-size="10" fill="rgba(232,224,248,0.75)">${value.toFixed(2)}</text>`
+    );
+  }
+
+  const coords = points.map((item, index) => {
+    const value = toFiniteNumber(item.value) ?? min;
+    const x = padding.left + index * xStep;
+    const y = padding.top + (max - value) * yScale;
+    return { x, y, value, date: String(item.date || '--'), count: Number(item.count || 0) };
+  });
+
+  const polylinePoints = coords.map((item) => `${item.x},${item.y}`).join(' ');
+  timelineChart.insertAdjacentHTML(
+    'beforeend',
+    `<polyline fill="none" stroke="rgba(34,211,238,0.9)" stroke-width="2.5" points="${polylinePoints}" />`
+  );
+
+  coords.forEach((item, index) => {
+    timelineChart.insertAdjacentHTML(
+      'beforeend',
+      `<circle cx="${item.x}" cy="${item.y}" r="3.5" fill="rgba(168,85,247,1)" />`
+    );
+
+    const labelEvery = Math.ceil(coords.length / 6);
+    if (index % labelEvery === 0 || index === coords.length - 1) {
+      const shortDate = item.date.slice(5);
+      timelineChart.insertAdjacentHTML(
+        'beforeend',
+        `<text x="${item.x}" y="${height - 12}" text-anchor="middle" font-size="10" fill="rgba(232,224,248,0.72)">${shortDate}</text>`
+      );
+    }
+  });
+
+  timelineChart.insertAdjacentHTML(
+    'beforeend',
+    `<text x="${padding.left}" y="${padding.top - 4}" font-size="11" fill="rgba(232,224,248,0.85)">Serie temporal (${metricLabel})</text>`
+  );
+
+  const latest = coords[coords.length - 1];
+  const first = coords[0];
+  const delta = state.timeline.latest_delta;
+  const summaryItems = [
+    `<div class="timeline-pill">Inicio<br /><strong>${first.value.toFixed(3)}</strong> (${first.date})</div>`,
+    `<div class="timeline-pill">Atual<br /><strong>${latest.value.toFixed(3)}</strong> (${latest.date})</div>`,
+    `<div class="timeline-pill">Pontos<br /><strong>${coords.length}</strong> dias agregados</div>`,
+  ];
+  if (delta && toFiniteNumber(delta.delta) !== null) {
+    const sign = delta.delta >= 0 ? '+' : '';
+    summaryItems.push(
+      `<div class="timeline-pill">Variacao recente<br /><strong>${sign}${Number(delta.delta).toFixed(3)}</strong> (${delta.previous_date || '--'} -> ${delta.latest_date || '--'})</div>`
+    );
+  }
+  timelineSummary.innerHTML = summaryItems.join('');
+};
+
+const refreshTimeline = async () => {
+  state.timeline.metric = timelineMetricSelect?.value || 'psnr';
+  state.timeline.method = timelineMethodSelect?.value || '';
+  const timeline = await loadTimeline(state.experimentsFilters);
+  state.timeline = timeline;
+  populateTimelineMethodFilter();
+  if (timelineMethodSelect && state.timeline.method) {
+    timelineMethodSelect.value = state.timeline.method;
+  }
+  renderTimelineChart();
 };
 
 const requestExperimentsComparison = async () => {
@@ -576,6 +1054,7 @@ const loadSelectedSceneFrame = () => {
 
   renderImage.src = framePath;
   renderImage.alt = `Cena ${scene.label || scene.id} - ${split.name}`;
+  state.renderMode = 'dataset';
   renderStatus.textContent = `Cena: ${scene.label || scene.id} | Split: ${split.name}`;
   renderFallback.textContent = `A imagem selecionada nao pode ser carregada: ${framePath}`;
 
@@ -761,7 +1240,8 @@ const buildPanels = (metrics) => {
   return entries.map(([method, payload]) => normalizeMetricEntry(method, payload));
 };
 
-const isMobileMode = () => window.innerWidth < 920;
+// Layout is intentionally always card/stack based; no floating desktop windows.
+const isMobileMode = () => true;
 const isTiledDesktopMode = () => false;
 
 const getDesktopBounds = () => {
@@ -918,6 +1398,7 @@ const setWindowRect = (element, rect) => {
 };
 
 const renderDock = () => {
+  if (!windowDock) return;
   windowDock.innerHTML = '';
   Object.keys(WINDOW_TITLES).forEach((id) => {
     const win = state.windows[id];
@@ -1368,9 +1849,24 @@ const main = async () => {
   populateSceneControls(scenes);
   renderExperimentHistory();
   populateHistoryMethodFilter();
+  await refreshTimeline();
+  setHistoryTab('runs');
   if (compareSelectedBtn) {
     compareSelectedBtn.disabled = state.selectedRunIds.size < 2;
   }
+
+  state.autoCameraPreviewEnabled = !!autoCameraPreviewToggle?.checked;
+  state.cameraPreviewMode = cameraPreviewModeSelect?.value || 'auto';
+  state.tuning.refreshIntervalSec = Number(sliderRefreshInterval?.value || 9);
+  state.tuning.renderScalePercent = Number(sliderRenderScale?.value || 100);
+  state.tuning.spatialRefreshEvery = Number(sliderSpatialRefresh?.value || 1);
+  if (sliderRefreshIntervalValue) sliderRefreshIntervalValue.textContent = String(state.tuning.refreshIntervalSec);
+  if (sliderRenderScaleValue) sliderRenderScaleValue.textContent = String(state.tuning.renderScalePercent);
+  if (sliderSpatialRefreshValue) sliderSpatialRefreshValue.textContent = String(state.tuning.spatialRefreshEvery);
+  setFineTuneTab('sliders');
+  startTrainingSyncLoop();
+  await syncTrainingState({ force: true });
+  await maybeAutoCameraPreview({ force: true });
 };
 
 panelCollapse?.addEventListener('click', () => {
@@ -1382,6 +1878,7 @@ primarySelect.addEventListener('change', () => {
   if (renderMethodSelect) {
     renderMethodSelect.value = primarySelect.value;
   }
+  state.renderMode = 'method';
   updateRender();
   updateActiveMetrics();
 });
@@ -1390,8 +1887,69 @@ renderMethodSelect?.addEventListener('change', () => {
   if (primarySelect.value !== renderMethodSelect.value) {
     primarySelect.value = renderMethodSelect.value;
   }
+  state.renderMode = 'method';
   updateRender();
   updateActiveMetrics();
+});
+
+renderAtCameraBtn?.addEventListener('click', async () => {
+  await requestCameraRender({ quality: 'manual', width: 1280, height: 720 });
+  await syncTrainingState({ force: true });
+  openWindow('render');
+  focusWindow('render');
+});
+
+autoCameraPreviewToggle?.addEventListener('change', async () => {
+  state.autoCameraPreviewEnabled = !!autoCameraPreviewToggle.checked;
+  if (state.autoCameraPreviewEnabled) {
+    await maybeAutoCameraPreview({ force: true });
+  }
+});
+
+cameraPreviewModeSelect?.addEventListener('change', () => {
+  state.cameraPreviewMode = cameraPreviewModeSelect.value || 'auto';
+});
+
+fineTuneTabButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const tabId = button.dataset.fineTuneTab || 'sliders';
+    setFineTuneTab(tabId);
+  });
+});
+
+sliderRefreshInterval?.addEventListener('input', () => {
+  state.tuning.refreshIntervalSec = Number(sliderRefreshInterval.value || 9);
+  if (sliderRefreshIntervalValue) {
+    sliderRefreshIntervalValue.textContent = String(state.tuning.refreshIntervalSec);
+  }
+  startTrainingSyncLoop();
+});
+
+sliderRenderScale?.addEventListener('input', () => {
+  state.tuning.renderScalePercent = Number(sliderRenderScale.value || 100);
+  if (sliderRenderScaleValue) {
+    sliderRenderScaleValue.textContent = String(state.tuning.renderScalePercent);
+  }
+});
+
+sliderSpatialRefresh?.addEventListener('input', () => {
+  state.tuning.spatialRefreshEvery = Number(sliderSpatialRefresh.value || 1);
+  if (sliderSpatialRefreshValue) {
+    sliderSpatialRefreshValue.textContent = String(state.tuning.spatialRefreshEvery);
+  }
+});
+
+refreshPreviewStateBtn?.addEventListener('click', async () => {
+  await loadPreviewState();
+});
+
+loadPreviewStateBtn?.addEventListener('click', async () => {
+  await loadPreviewState();
+});
+
+refreshSpatialPreviewBtn?.addEventListener('click', async () => {
+  await refreshSpatialPreview();
+  await loadPreviewState();
 });
 
 secondarySelect.addEventListener('change', () => {
@@ -1430,10 +1988,7 @@ generateReportBtn?.addEventListener('click', () => {
 });
 
 refreshHistoryBtn?.addEventListener('click', async () => {
-  const items = await loadExperiments(state.experimentsFilters);
-  state.experiments = items;
-  renderExperimentHistory();
-  populateHistoryMethodFilter();
+  await syncTrainingState({ force: true });
 });
 
 compareSelectedBtn?.addEventListener('click', async () => {
@@ -1446,6 +2001,7 @@ historyFilterMethod?.addEventListener('change', async () => {
   state.experiments = items;
   state.selectedRunIds.clear();
   renderExperimentHistory();
+  await refreshTimeline();
 });
 
 historyFilterStatus?.addEventListener('change', async () => {
@@ -1454,6 +2010,7 @@ historyFilterStatus?.addEventListener('change', async () => {
   state.experiments = items;
   state.selectedRunIds.clear();
   renderExperimentHistory();
+  await refreshTimeline();
 });
 
 historyFilterDataset?.addEventListener('change', async () => {
@@ -1462,6 +2019,27 @@ historyFilterDataset?.addEventListener('change', async () => {
   state.experiments = items;
   state.selectedRunIds.clear();
   renderExperimentHistory();
+  await refreshTimeline();
+});
+
+historyTabButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const tabId = button.dataset.historyTab || 'runs';
+    setHistoryTab(tabId);
+  });
+});
+
+refreshTimelineBtn?.addEventListener('click', async () => {
+  await refreshTimeline();
+  await maybeAutoCameraPreview({ force: true });
+});
+
+timelineMetricSelect?.addEventListener('change', async () => {
+  await refreshTimeline();
+});
+
+timelineMethodSelect?.addEventListener('change', async () => {
+  await refreshTimeline();
 });
 
 themeToggle.addEventListener('change', (event) => {

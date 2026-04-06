@@ -8,13 +8,20 @@ import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 from urllib.parse import urlencode
 
 from nvs_benchmark.core.experiments import ExperimentManager
 from nvs_benchmark.install import install_item_by_id, load_install_catalog
 from nvs_benchmark.reporting import generate_experiments_comparison_report
-from nvs_benchmark.ui.preview import run_preview_ui
+from nvs_benchmark.ui.preview import (
+    capture_preview_camera_render,
+    get_preview_runtime_state,
+    nearest_scene_frame_index,
+    refresh_preview_scene,
+    run_preview_ui,
+)
 
 
 def _find_available_port(host: str, preferred_port: int, max_tries: int = 20) -> int:
@@ -120,12 +127,145 @@ def _first_image_in_dir(path: Path) -> Path | None:
     return None
 
 
+def _find_method_render_frame(base_dir: Path, method_id: str, frame_index: int | None) -> Path | None:
+    """Find a render image for method, preferring nearest-frame index when available."""
+    safe_method = method_id.strip()
+    if not safe_method:
+        return None
+
+    candidates: list[Path] = []
+    if frame_index is not None and frame_index >= 0:
+        frame_name = f"frame_{int(frame_index):04d}.png"
+        candidates.extend(
+            [
+                base_dir / "artifacts" / f"custom-{safe_method}" / safe_method / "renders" / frame_name,
+                base_dir / "artifacts" / safe_method / "renders" / frame_name,
+            ]
+        )
+
+    candidates.extend(
+        [
+            base_dir / "artifacts" / f"custom-{safe_method}" / safe_method / "renders" / "frame_0000.png",
+            base_dir / "artifacts" / safe_method / "renders" / "frame_0000.png",
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _parse_timestamp_day(value: object) -> str | None:
+    """Normalize timestamp string to YYYY-MM-DD when possible."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed.date().isoformat()
+    except Exception:
+        # Fallback for loosely formatted timestamps.
+        if len(value) >= 10 and value[4] == "-" and value[7] == "-":
+            return value[:10]
+        return None
+
+
+def _safe_float(value: object) -> float | None:
+    """Convert arbitrary JSON value to finite float."""
+    try:
+        num = float(value)
+    except Exception:
+        return None
+    if num != num:
+        return None
+    if num in (float("inf"), float("-inf")):
+        return None
+    return num
+
+
+def _build_experiments_timeline(
+    items: list[dict],
+    *,
+    metric: str,
+    method: str | None,
+    dataset: str | None,
+    status: str | None,
+    include_smoke: bool,
+) -> dict:
+    """Aggregate experiment metrics into daily temporal points."""
+    supported = {"psnr", "ssim", "lpips", "fps"}
+    metric_name = metric if metric in supported else "psnr"
+
+    grouped: dict[str, list[float]] = {}
+    methods_seen: set[str] = set()
+
+    for row in items:
+        run_id = str(row.get("run_id") or "")
+        row_method = str(row.get("method") or "")
+        row_dataset = str(row.get("dataset") or "")
+        row_status = str(row.get("status") or "")
+
+        if not include_smoke and (run_id.startswith("smoke-") or run_id.startswith("metrics-")):
+            continue
+        if method and row_method != method:
+            continue
+        if dataset and row_dataset != dataset:
+            continue
+        if status and row_status != status:
+            continue
+
+        timestamp = row.get("timestamp")
+        day = _parse_timestamp_day(timestamp)
+        if not day:
+            continue
+
+        summary = row.get("metrics_summary")
+        metric_value = None
+        if isinstance(summary, dict):
+            metric_value = _safe_float(summary.get(metric_name))
+        if metric_value is None:
+            continue
+
+        grouped.setdefault(day, []).append(metric_value)
+        if row_method:
+            methods_seen.add(row_method)
+
+    points = []
+    for day in sorted(grouped.keys()):
+        values = grouped[day]
+        avg = sum(values) / len(values)
+        points.append({"date": day, "value": round(avg, 6), "count": len(values)})
+
+    latest_delta = None
+    if len(points) >= 2:
+        previous = points[-2]
+        latest = points[-1]
+        latest_delta = {
+            "previous_date": previous["date"],
+            "latest_date": latest["date"],
+            "delta": round(float(latest["value"]) - float(previous["value"]), 6),
+        }
+
+    return {
+        "metric": metric_name,
+        "methods": sorted(methods_seen),
+        "points": points,
+        "latest_delta": latest_delta,
+    }
+
+
 class _DashboardHandler(SimpleHTTPRequestHandler):
     """Serve static assets and a tiny JSON API for installs."""
 
-    def __init__(self, *args, base_dir: Path, catalog_path: Path, **kwargs):
+    def __init__(self, *args, base_dir: Path, catalog_path: Path, preview_port: int, **kwargs):
         self._base_dir = base_dir
         self._catalog_path = catalog_path
+        self._preview_port = int(preview_port)
         super().__init__(*args, directory=str(base_dir), **kwargs)
 
     def _json_response(self, payload: dict, status: int = 200) -> None:
@@ -206,6 +346,67 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
                 enriched.append(row)
             self._json_response({"experiments": enriched})
             return
+        if route == "/api/experiments-timeline":
+            manager = ExperimentManager(output_dir=self._base_dir / "artifacts")
+            query = parse_qs(parsed.query)
+            metric = str(query.get("metric", ["psnr"])[0] or "psnr")
+            method = query.get("method", [None])[0]
+            dataset = query.get("dataset", [None])[0]
+            status = query.get("status", [None])[0]
+            include_smoke_raw = query.get("include_smoke", ["false"])[0]
+            include_smoke = str(include_smoke_raw).strip().lower() in {"1", "true", "yes", "on"}
+
+            rows = manager.list(limit=None)
+            timeline = _build_experiments_timeline(
+                rows,
+                metric=metric,
+                method=method,
+                dataset=dataset,
+                status=status,
+                include_smoke=include_smoke,
+            )
+            self._json_response(timeline)
+            return
+        if route == "/api/preview-state":
+            payload = get_preview_runtime_state(self._preview_port)
+            self._json_response(payload)
+            return
+        if route == "/api/training-status":
+            manager = ExperimentManager(output_dir=self._base_dir / "artifacts")
+            rows = manager.list(limit=1)
+            latest = rows[-1] if rows else None
+
+            metrics_file = self._base_dir / "artifacts" / "metrics" / "latest_preview.json"
+            metrics_mtime = None
+            if metrics_file.exists():
+                try:
+                    metrics_mtime = metrics_file.stat().st_mtime
+                except Exception:
+                    metrics_mtime = None
+
+            checkpoint_exists = False
+            checkpoint_path = None
+            if isinstance(latest, dict):
+                raw_checkpoint = latest.get("checkpoint_path")
+                if isinstance(raw_checkpoint, str) and raw_checkpoint:
+                    checkpoint = Path(raw_checkpoint)
+                    if not checkpoint.is_absolute():
+                        checkpoint = (self._base_dir / checkpoint).resolve()
+                    checkpoint_exists = checkpoint.exists()
+                    checkpoint_path = str(checkpoint)
+
+            self._json_response(
+                {
+                    "latest_run": latest,
+                    "metrics_mtime": metrics_mtime,
+                    "checkpoint": {
+                        "path": checkpoint_path,
+                        "exists": checkpoint_exists,
+                    },
+                    "preview": get_preview_runtime_state(self._preview_port),
+                }
+            )
+            return
         return super().do_GET()
 
     def list_directory(self, path: str):  # type: ignore[override]
@@ -257,6 +458,94 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
                 self._json_response({"error": str(exc)}, status=400)
             return
 
+        if route == "/api/render-camera":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError:
+                self._json_response({"ok": False, "error": "invalid-json"}, status=400)
+                return
+
+            width = int(payload.get("width") or 960)
+            height = int(payload.get("height") or 540)
+            quality = str(payload.get("quality") or "manual").strip().lower()
+            method_id = str(payload.get("method_id") or "").strip()
+            preview_mode = str(payload.get("preview_mode") or "auto").strip().lower()
+
+            nearest_idx = nearest_scene_frame_index(self._preview_port)
+            if preview_mode != "viser":
+                artifact_path = _find_method_render_frame(self._base_dir, method_id, nearest_idx)
+                if artifact_path is not None:
+                    try:
+                        web_path = _to_web_path(artifact_path, self._base_dir)
+                    except Exception:
+                        self._json_response({"ok": False, "error": "render-path-outside-base"}, status=500)
+                        return
+                    self._json_response(
+                        {
+                            "ok": True,
+                            "image_url": web_path,
+                            "camera": get_preview_runtime_state(self._preview_port).get("camera") or {},
+                            "quality": quality,
+                            "source": "artifact",
+                            "frame_index": nearest_idx,
+                            "preview_mode": preview_mode,
+                        }
+                    )
+                    return
+
+            if preview_mode == "artifact":
+                self._json_response(
+                    {
+                        "ok": False,
+                        "error": "artifact-not-found",
+                        "preview_mode": preview_mode,
+                        "frame_index": nearest_idx,
+                    },
+                    status=409,
+                )
+                return
+
+            output_name = "live_camera_render.jpg" if quality == "manual" else "live_camera_preview.jpg"
+
+            capture = capture_preview_camera_render(
+                port=self._preview_port,
+                width=width,
+                height=height,
+                output_name=output_name,
+            )
+            if not capture.get("ok"):
+                self._json_response(capture, status=409)
+                return
+
+            image_path = Path(str(capture.get("path")))
+            try:
+                web_path = _to_web_path(image_path, self._base_dir)
+            except Exception:
+                self._json_response({"ok": False, "error": "render-path-outside-base"}, status=500)
+                return
+
+            self._json_response(
+                {
+                    "ok": True,
+                    "image_url": web_path,
+                    "camera": capture.get("camera") or {},
+                    "width": capture.get("width"),
+                    "height": capture.get("height"),
+                    "quality": quality,
+                    "source": "viser_capture",
+                    "preview_mode": preview_mode,
+                }
+            )
+            return
+
+        if route == "/api/preview-refresh":
+            result = refresh_preview_scene(self._preview_port)
+            status = 200 if result.get("ok") else 409
+            self._json_response(result, status=status)
+            return
+
         if route != "/api/install":
             return super().do_POST()
 
@@ -281,9 +570,9 @@ class _DashboardHandler(SimpleHTTPRequestHandler):
             self._json_response({"error": str(exc)}, status=500)
 
 
-def _start_dashboard_server(host: str, port: int, base_dir: Path, catalog_path: Path) -> ThreadingHTTPServer:
+def _start_dashboard_server(host: str, port: int, base_dir: Path, catalog_path: Path, preview_port: int) -> ThreadingHTTPServer:
     handler = lambda *args, **kwargs: _DashboardHandler(  # noqa: E731
-        *args, base_dir=base_dir, catalog_path=catalog_path, **kwargs
+        *args, base_dir=base_dir, catalog_path=catalog_path, preview_port=preview_port, **kwargs
     )
     server = ThreadingHTTPServer((host, port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -306,7 +595,7 @@ def run_dashboard_ui(
     catalog_path = Path(install_catalog_file or "./configs/install_catalog.json").resolve()
     resolved_viser_port = _find_available_port(host, viser_port)
 
-    _start_dashboard_server(host, dashboard_port, base_dir, catalog_path)
+    _start_dashboard_server(host, dashboard_port, base_dir, catalog_path, resolved_viser_port)
 
     metrics_web_path = "/artifacts/metrics/latest_preview.json"
     if metrics_file:

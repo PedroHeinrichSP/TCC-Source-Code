@@ -106,6 +106,54 @@ class ReportingTests(unittest.TestCase):
             self.assertTrue(html_path.exists())
             self.assertIn("method_b", result["winner"])
 
+    def test_generate_comparison_reports_pdf_e2e(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "snapshot_pdf.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "method_a": {
+                            "psnr": 24.0,
+                            "ssim": 0.85,
+                            "lpips": 0.30,
+                            "fps": 12.0,
+                            "vram_gb": 7.0,
+                            "train_seconds": 90.0,
+                            "inference_seconds": 9.0,
+                        },
+                        "method_b": {
+                            "psnr": 28.0,
+                            "ssim": 0.90,
+                            "lpips": 0.22,
+                            "fps": 16.0,
+                            "vram_gb": 6.5,
+                            "train_seconds": 80.0,
+                            "inference_seconds": 8.0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = generate_comparison_reports(
+                snapshot_file=snapshot,
+                output_dir=root / "reports",
+                report_name="pdf_e2e",
+                generate_pdf=True,
+            )
+
+            html_path = Path(result["html_path"])
+            self.assertTrue(html_path.exists())
+
+            if "pdf_error" in result:
+                self.skipTest(f"WeasyPrint indisponivel neste ambiente: {result['pdf_error']}")
+
+            self.assertIn("pdf_path", result)
+            pdf_path = Path(result["pdf_path"])
+            self.assertTrue(pdf_path.exists())
+            self.assertGreater(pdf_path.stat().st_size, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

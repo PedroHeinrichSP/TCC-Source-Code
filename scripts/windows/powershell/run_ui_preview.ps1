@@ -1,5 +1,5 @@
 param(
-    [string]$Host = "127.0.0.1",
+    [string]$PreviewHost = "127.0.0.1",
     [int]$Port = 8765,
     [string]$MetricsFile = "./artifacts/metrics/latest.json",
     [string]$SceneFile = "./data/blender_synthetic/nerf_synthetic/lego/transforms_train.json"
@@ -78,7 +78,7 @@ Write-Host ""
 
 $cmdArgs = @(
     "-m", "nvs_benchmark.cli", "ui-preview",
-    "--host", $Host,
+    "--host", $PreviewHost,
     "--port", $Port,
     "--metrics-file", $AbsMetricsFile,
     "--scene-transforms-file", $AbsSceneFile,

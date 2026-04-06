@@ -316,7 +316,226 @@ def build_parser() -> argparse.ArgumentParser:
         help="Simular ajuste conservador de preset no estimate-time",
     )
 
+    create_adapter_parser = subparsers.add_parser(
+        "create-adapter",
+        help="Gerar scaffold de adaptador de metodo para estudantes",
+    )
+    create_adapter_parser.add_argument(
+        "name",
+        help="Nome do adaptador (ex: meu_metodo). Sera usado como ID e nome da pasta.",
+    )
+    create_adapter_parser.add_argument(
+        "--output-dir",
+        default="./src/nvs_benchmark/methods",
+        help="Diretório onde a pasta do adaptador sera criada",
+    )
+    create_adapter_parser.add_argument(
+        "--kind",
+        default="nerf_static",
+        choices=["nerf_static", "nerf_dynamic", "gs_static", "gs_dynamic", "external"],
+        help="Familia do metodo (define capabilities padrao)",
+    )
+
     return parser
+
+
+def run_create_adapter(name: str, output_dir: str, kind: str) -> int:
+    """Gera scaffold completo de adaptador de metodo para o estudante."""
+    import re
+    import textwrap
+
+    # Validar nome
+    if not re.match(r"^[a-z][a-z0-9_]{1,31}$", name):
+        print("Erro: nome deve comecar com letra minuscula e conter apenas letras, digitos e '_' (max 32 chars).")
+        return 1
+
+    adapter_dir = Path(output_dir) / name
+    if adapter_dir.exists():
+        print(f"Pasta ja existe: {adapter_dir}")
+        print("Remova-a manualmente ou escolha outro nome.")
+        return 1
+
+    is_dynamic = kind in {"nerf_dynamic", "gs_dynamic"}
+    is_gs = kind in {"gs_static", "gs_dynamic"}
+    display_name = name.replace("_", " ").title()
+
+    # --- adapter/__init__.py ---
+    init_content = textwrap.dedent(f"""\
+        \"\"\"Adaptador de metodo: {display_name}.\"\"\"  # noqa: D100
+
+        from .adapter import {name.title().replace('_','')}Adapter
+
+        __all__ = ["{name.title().replace('_','')}Adapter"]
+        """)
+
+    # --- adapter/adapter.py ---
+    supports_dynamic = str(is_dynamic).lower()
+    adapter_content = textwrap.dedent(f"""\
+        \"\"\"Implementacao do adaptador {display_name}.
+
+        Seguir os passos marcados com TODO para completar a integracao.
+        Consulte a documentacao em docs/ para orientacoes detalhadas.
+        \"\"\"
+
+        from __future__ import annotations
+
+        import subprocess
+        from pathlib import Path
+
+        from nvs_benchmark.core.contracts import (
+            InferenceRequest,
+            InferenceResult,
+            MethodCapabilities,
+            PerformanceStats,
+            RunConfig,
+            TrainRequest,
+            TrainResult,
+        )
+        from nvs_benchmark.methods.subprocess_utils import format_subprocess_error, run_subprocess
+
+
+        class {name.title().replace('_', '')}Adapter:
+            \"\"\"Adaptador para o metodo {display_name}.\"\"\"
+
+            method_id: str = "{name}"
+            display_name: str = "{display_name}"
+            capabilities: MethodCapabilities = MethodCapabilities(
+                supports_train=True,
+                supports_inference=True,
+                supports_dynamic_scene={supports_dynamic},
+                supports_limited_gpu=True,
+            )
+
+            def validate_config(self, config: RunConfig) -> None:
+                \"\"\"Valida a configuracao antes de executar.\"\"\"
+                # TODO: valide pre-condicoes necessarias, ex: GPU disponivel, dataset correto, etc.
+                pass
+
+            def train(self, request: TrainRequest) -> TrainResult:
+                \"\"\"Executa o treinamento do metodo.\"\"\"
+                config = request.config
+                output_dir = Path(config.output_dir) / config.run_id / self.method_id
+                output_dir.mkdir(parents=True, exist_ok=True)
+                checkpoint = output_dir / "checkpoint_final.pth"
+
+                # TODO: construa o comando real para treinar seu metodo.
+                # Exemplo:
+                #   cmd = [
+                #       "python", "./third_party/{name}/train.py",
+                #       "--data", config.dataset.root,
+                #       "--output", str(output_dir),
+                #   ]
+                #   result = run_subprocess(cmd, timeout=config.timeout_seconds)
+                #   if not result.success:
+                #       raise RuntimeError(format_subprocess_error(result))
+
+                # Remova este bloco stub quando implementar o treino real:
+                import time
+                start = time.perf_counter()
+                checkpoint.write_text("# stub checkpoint", encoding="utf-8")
+                elapsed = time.perf_counter() - start
+
+                return TrainResult(
+                    method=self.method_id,
+                    checkpoint_path=str(checkpoint),
+                    train_seconds=elapsed,
+                    output_dir=str(output_dir),
+                )
+
+            def infer(self, request: InferenceRequest) -> InferenceResult:
+                \"\"\"Executa a inferencia (render de imagens de novos pontos de vista).\"\"\"
+                config = request.config
+                render_dir = Path(config.output_dir) / config.run_id / self.method_id / "renders"
+                render_dir.mkdir(parents=True, exist_ok=True)
+
+                # TODO: construa o comando real para inferencia do seu metodo.
+                # Exemplo:
+                #   cmd = [
+                #       "python", "./third_party/{name}/render.py",
+                #       "--checkpoint", request.checkpoint_path,
+                #       "--output", str(render_dir),
+                #   ]
+                #   result = run_subprocess(cmd, timeout=config.timeout_seconds)
+                #   if not result.success:
+                #       raise RuntimeError(format_subprocess_error(result))
+
+                # Stub: copia primeiro frame do dataset como render simulado
+                import time
+                from nvs_benchmark.methods.utils import render_stub_from_dataset
+                start = time.perf_counter()
+                render_stub_from_dataset(root=config.dataset.root, split=request.split, render_dir=render_dir)
+                elapsed = time.perf_counter() - start
+
+                rendered_frames = list(render_dir.glob("*.png")) + list(render_dir.glob("*.jpg"))
+                return InferenceResult(
+                    method=self.method_id,
+                    rendered_dir=str(render_dir),
+                    frames=len(rendered_frames),
+                    inference_seconds=elapsed,
+                )
+
+            def collect_performance(self) -> PerformanceStats:
+                \"\"\"Retorna estatísticas de desempenho medidas durante a execucao.\"\"\"
+                # TODO: preencha com valores reais coletados durante train/infer.
+                return PerformanceStats(
+                    fps=0.0,
+                    vram_gb_peak=0.0,
+                    train_seconds=0.0,
+                    inference_seconds=0.0,
+                )
+        """)
+
+    # --- README.md do adaptador ---
+    readme_content = textwrap.dedent(f"""\
+        # Adaptador: {display_name}
+
+        Este diretorio contem o adaptador NVS Benchmark para o metodo **{display_name}**.
+
+        ## Como implementar
+
+        1. Edite `adapter.py` e substitua os blocos `# TODO` pelo codigo real do seu metodo.
+        2. O metodo deve:
+           - `train()`: executar treinamento e salvar checkpoint
+           - `infer()`: renderizar imagens de novos pontos de vista
+        3. Use `run_subprocess()` de `methods/subprocess_utils.py` para chamar scripts externos.
+        4. Registre o adaptador em `methods/__init__.py` ou `methods/registry.py`.
+
+        ## Testando
+
+        ```bash
+        nvs-benchmark method-run \\\\
+            --method {name} \\\\
+            --dataset blender_synthetic \\\\
+            --root ./data/blender_synthetic/nerf_synthetic/lego \\\\
+            --preset smoke
+        ```
+
+        ## Estrutura
+
+        ```
+        {name}/
+          __init__.py     # exporta o adaptador
+          adapter.py      # implementacao principal (edite aqui)
+          README.md       # este arquivo
+        ```
+        """)
+
+    # Criar arquivos
+    adapter_dir.mkdir(parents=True)
+    (adapter_dir / "__init__.py").write_text(init_content, encoding="utf-8")
+    (adapter_dir / "adapter.py").write_text(adapter_content, encoding="utf-8")
+    (adapter_dir / "README.md").write_text(readme_content, encoding="utf-8")
+
+    print(f"Scaffold criado em: {adapter_dir}")
+    print()
+    print("Proximos passos:")
+    print(f"  1. Edite {adapter_dir / 'adapter.py'} e substitua os blocos TODO")
+    print(f"  2. Registre o adaptador no registry (methods/__init__.py ou methods/registry.py)")
+    print(f"  3. Teste com:")
+    print(f"     nvs-benchmark method-run --method {name} --dataset blender_synthetic ")
+    print(f"       --root ./data/minha_cena --preset smoke")
+    print()
+    return 0
 
 
 def run_init(config_path: str) -> int:
@@ -1207,6 +1426,12 @@ def main() -> int:
             validation_full=args.validation_full,
             validation_sample_size=args.validation_sample_size,
             adaptive_preset=args.adaptive_preset,
+        )
+    if args.command == "create-adapter":
+        return run_create_adapter(
+            name=args.name,
+            output_dir=args.output_dir,
+            kind=args.kind,
         )
 
     parser.print_help()

@@ -55,6 +55,8 @@ class RunConfig:
     log_dir: str = "./logs"
     hardware_profile: HardwareProfile = HardwareProfile.ADAPTIVE
     report_formats: list[ReportFormat] = field(default_factory=lambda: [ReportFormat.HTML, ReportFormat.PDF])
+    timeout_seconds: int | None = None
+    """Tempo máximo em segundos para cada etapa (train/infer). None = sem limite."""
     extra: dict[str, Any] = field(default_factory=dict)
 
 

@@ -1,0 +1,84 @@
+version: "3.9"
+
+# ============================================================
+# NVS Benchmark — Docker Compose
+# ============================================================
+# Uso:
+#   docker compose up --build               # build + iniciar
+#   docker compose up -d                    # segundo plano
+#   docker compose run benchmark bash       # shell interativo
+#   docker compose run benchmark nvs-benchmark standard-test
+
+services:
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nvs-benchmark:latest
+    container_name: nvs-benchmark
+
+    # Acesso à GPU (requer nvidia-container-toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Portas: Dashboard e Viser
+    ports:
+      - "8780:8780"   # Dashboard Web UI
+      - "8765:8765"   # Viser 3D Viewport
+
+    # Montar dados e artefatos como volumes para persistência
+    volumes:
+      - ./data:/workspace/data
+      - ./artifacts:/workspace/artifacts
+      - ./logs:/workspace/logs
+      - ./configs:/workspace/configs
+      # third_party montado como read-only (não modificar)
+      - ./third_party:/workspace/third_party:ro
+
+    # Variáveis de ambiente
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+    restart: unless-stopped
+
+    # Verificação de saúde
+    healthcheck:
+      test: ["CMD", "python", "-c", "import nvs_benchmark; print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Serviço utilitário para rodar comandos individuais (non-daemon)
+  benchmark-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nvs-benchmark:latest
+    profiles:
+      - cli
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./data:/workspace/data
+      - ./artifacts:/workspace/artifacts
+      - ./logs:/workspace/logs
+      - ./configs:/workspace/configs
+      - ./third_party:/workspace/third_party:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NVIDIA_VISIBLE_DEVICES=all
+    # Comando padrão: ajuda da CLI
+    command: ["nvs-benchmark", "--help"]

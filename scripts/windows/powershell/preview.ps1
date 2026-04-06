@@ -1,5 +1,5 @@
 param(
-    [string]$Host = "127.0.0.1",
+    [string]$PreviewHost = "127.0.0.1",
     [int]$Port = 8765,
     [string]$MetricsFile = "./artifacts/metrics/latest.json"
 )
@@ -23,7 +23,7 @@ Write-Host "====================================================" -ForegroundCol
 Write-Host ""
 Write-Host "Starting 3D viewer..." -ForegroundColor Green
 Write-Host ""
-Write-Host "Opening browser at: http://$Host`:$Port" -ForegroundColor Yellow
+Write-Host "Opening browser at: http://$PreviewHost`:$Port" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Features:" -ForegroundColor Cyan
 Write-Host "  - Compare method results side-by-side" -ForegroundColor Cyan
@@ -39,7 +39,7 @@ $childArgs = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", $RunUiPreviewScript,
-    "-Host", $Host,
+    "-PreviewHost", $PreviewHost,
     "-Port", $Port
 )
 
