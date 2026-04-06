@@ -32,6 +32,22 @@ if ($env:VIRTUAL_ENV) {
 $PythonExe = python -c "import sys; sys.stdout.write(sys.executable)" 2>$null
 Write-Host "Python in use: $PythonExe" -ForegroundColor Green
 
+try {
+    $TorchDiag = & python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)" 2>$null
+    $TorchLines = @($TorchDiag)
+    if ($TorchLines.Count -ge 3) {
+        $TorchVersion = $TorchLines[0]
+        $CudaAvailable = $TorchLines[1]
+        $CudaVersion = $TorchLines[2]
+        Write-Host "PyTorch: $TorchVersion | CUDA available: $CudaAvailable | CUDA runtime: $CudaVersion" -ForegroundColor DarkCyan
+        if ($CudaAvailable -ne "True") {
+            Write-Host "GPU indisponivel para este ambiente (build CPU-only ou driver/CUDA ausente)." -ForegroundColor Yellow
+        }
+    }
+} catch {
+    Write-Host "Nao foi possivel diagnosticar CUDA no PyTorch." -ForegroundColor Yellow
+}
+
 Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host "   Quick Benchmark (Single Method)" -ForegroundColor Cyan
 Write-Host "====================================================" -ForegroundColor Cyan

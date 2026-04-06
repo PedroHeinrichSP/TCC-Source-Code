@@ -63,6 +63,30 @@ if (Test-Path $TorchSearchsortedSetup) {
 
 Write-Host "Dependencies installed" -ForegroundColor Green
 
+# Diagnose torch CUDA support and print actionable guidance for GPU-enabled runs.
+try {
+    $TorchDiag = & python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)" 2>$null
+    $TorchLines = @($TorchDiag)
+    if ($TorchLines.Count -ge 3) {
+        $TorchVersion = $TorchLines[0]
+        $CudaAvailable = $TorchLines[1]
+        $CudaVersion = $TorchLines[2]
+
+        if ($CudaAvailable -ne "True") {
+            Write-Host "" 
+            Write-Host "WARNING: PyTorch sem CUDA detectado ($TorchVersion)." -ForegroundColor Yellow
+            Write-Host "Para usar GPU/VRAM, reinstale wheels CUDA do PyTorch nesta venv." -ForegroundColor Yellow
+            Write-Host "Sugestao (CUDA 12.8):" -ForegroundColor Yellow
+            Write-Host "  python -m pip install --upgrade --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128" -ForegroundColor Yellow
+            Write-Host "Depois valide com: python -c \"import torch; print(torch.cuda.is_available(), torch.version.cuda)\"" -ForegroundColor Yellow
+        } else {
+            Write-Host "CUDA habilitado no PyTorch (cuda=$CudaVersion)." -ForegroundColor Green
+        }
+    }
+} catch {
+    Write-Host "Nao foi possivel diagnosticar suporte CUDA do PyTorch." -ForegroundColor Yellow
+}
+
 # Step 3: Validate installation
 Write-Host ""
 Write-Host "Step 3/3: Validating installation..." -ForegroundColor Yellow
