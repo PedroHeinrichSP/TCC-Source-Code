@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -95,6 +96,48 @@ def _suggest_command(item: InstallItem) -> str:
     return ""
 
 
+def _exec_cross_platform(command: str) -> subprocess.CompletedProcess:
+    """Executa comando shell de forma cross-platform.
+    
+    No Windows: usa PowerShell
+    No Linux/macOS: usa sh
+    """
+    os_name = platform.system()
+    if os_name == "Windows":
+        # Windows: use PowerShell natively
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            text=True,
+            capture_output=False,
+        )
+    else:
+        # Linux/macOS: use sh
+        return subprocess.run(
+            ["sh", "-c", command],
+            text=True,
+            capture_output=False,
+        )
+
+
+def _install_dataset_wget_curl(dataset_name: str, url: str, target_path: str) -> int:
+    """Baixa dataset usando wget ou curl (fallback para Linux/Colab).
+    
+    Retorna 0 se sucesso, non-zero se falha.
+    """
+    target = Path(target_path).parent
+    target.mkdir(parents=True, exist_ok=True)
+    
+    # Tenta wget primeiro
+    cmd_wget = f'wget -q "{url}" -O /tmp/{dataset_name}.zip && unzip -q /tmp/{dataset_name}.zip -d "{target}" && rm /tmp/{dataset_name}.zip'
+    ret = subprocess.run(["sh", "-c", cmd_wget], capture_output=True).returncode
+    if ret == 0:
+        return 0
+    
+    # Fallback para curl
+    cmd_curl = f'curl -s -L "{url}" -o /tmp/{dataset_name}.zip && unzip -q /tmp/{dataset_name}.zip -d "{target}" && rm /tmp/{dataset_name}.zip'
+    return subprocess.run(["sh", "-c", cmd_curl], capture_output=True).returncode
+
+
 def install_items(
     *,
     catalog: InstallCatalog,
@@ -104,6 +147,7 @@ def install_items(
     """Instalar itens usando comandos fornecidos no catálogo.
 
     Retorna uma lista de mensagens descrevendo as ações tomadas.
+    Funciona cross-platform: PowerShell no Windows, sh no Linux/macOS/Colab.
     """
     messages: list[str] = []
     targets: list[InstallItem] = []
@@ -122,9 +166,26 @@ def install_items(
             continue
         messages.append(f"[plan] {item.label}: {command}")
         if execute:
-            args = shlex.split(command)
-            subprocess.run(args, check=True)
-            messages.append(f"[ok] {item.label}: command executed")
+            # Detecta se é comando PowerShell Windows e adapta para Linux
+            os_name = platform.system()
+            if ("powershell" in command.lower() or "invoke-webrequest" in command.lower()) and os_name != "Windows":
+                # Comando PowerShell em ambiente Linux/Colab: usa wget/curl
+                messages.append(f"[info] {item.label}: detectado comando Windows, usando wget/curl em {os_name}")
+                ret = _install_dataset_wget_curl(item.item_id, item.url, item.path)
+                if ret == 0:
+                    messages.append(f"[ok] {item.label}: command executed (wget/curl)")
+                else:
+                    messages.append(f"[error] {item.label}: command failed (wget/curl returned {ret})")
+            else:
+                # Comando generico ou nativo: usa _exec_cross_platform
+                try:
+                    proc = _exec_cross_platform(command)
+                    if proc.returncode == 0:
+                        messages.append(f"[ok] {item.label}: command executed")
+                    else:
+                        messages.append(f"[error] {item.label}: command failed (exit {proc.returncode})")
+                except Exception as exc:
+                    messages.append(f"[error] {item.label}: {exc}")
 
     return messages
 
@@ -135,7 +196,7 @@ def install_item_by_id(
     item_id: str,
     execute: bool = False,
 ) -> list[str]:
-    """Instalar um único item pelo seu ID."""
+    """Instalar um único item pelo seu ID (cross-platform)."""
     messages: list[str] = []
     targets = catalog.datasets + catalog.methods
     matches = [item for item in targets if item.item_id == item_id]
@@ -152,7 +213,22 @@ def install_item_by_id(
 
     messages.append(f"[plan] {item.label}: {command}")
     if execute:
-        args = shlex.split(command)
-        subprocess.run(args, check=True)
-        messages.append(f"[ok] {item.label}: command executed")
+        # Mesma lógica cross-platform que install_items
+        os_name = platform.system()
+        if ("powershell" in command.lower() or "invoke-webrequest" in command.lower()) and os_name != "Windows":
+            messages.append(f"[info] {item.label}: detectado comando Windows, usando wget/curl em {os_name}")
+            ret = _install_dataset_wget_curl(item.item_id, item.url, item.path)
+            if ret == 0:
+                messages.append(f"[ok] {item.label}: command executed (wget/curl)")
+            else:
+                messages.append(f"[error] {item.label}: command failed (wget/curl returned {ret})")
+        else:
+            try:
+                proc = _exec_cross_platform(command)
+                if proc.returncode == 0:
+                    messages.append(f"[ok] {item.label}: command executed")
+                else:
+                    messages.append(f"[error] {item.label}: command failed (exit {proc.returncode})")
+            except Exception as exc:
+                messages.append(f"[error] {item.label}: {exc}")
     return messages
