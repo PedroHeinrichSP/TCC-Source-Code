@@ -30,6 +30,17 @@
         </div>
       </header>
 
+      <section class="ui-statusbar" aria-live="polite">
+        <div class="ui-status-main">
+          <span class="ui-status-dot" id="ui-status-dot"></span>
+          <span id="ui-status-text">Interface pronta.</span>
+        </div>
+        <div id="ui-status-time" class="ui-status-time">--:--:--</div>
+        <div class="ui-status-progress-track" role="progressbar" aria-label="Atividade da interface">
+          <div id="ui-status-progress" class="ui-status-progress"></div>
+        </div>
+      </section>
+
       <main class="desktop" id="desktop">
         <section class="os-window" data-window-id="preview" aria-label="Previa espacial">
           <div class="window-titlebar">
@@ -220,7 +231,7 @@
                   <label for="scene-frame">Imagem</label>
                   <select id="scene-frame" class="select"></select>
                 </div>
-                <button class="btn" id="load-scene">Abrir cena no render</button>
+                <button class="btn" id="load-scene">Gerar preview do modelo</button>
 
                 <div class="control-group-title">COMPARACAO</div>
                 <div class="field">
@@ -237,6 +248,15 @@
                 <div class="action-row">
                   <button class="btn secondary" id="live-render">Abrir Viser em aba separada</button>
                   <button class="btn secondary" id="generate-report">Abrir relatorio principal</button>
+                </div>
+
+                <div class="control-group-title">LOGS DA INTERFACE</div>
+                <div class="ui-log-card">
+                  <div class="ui-log-header">
+                    <strong>Eventos recentes</strong>
+                    <button class="btn secondary" id="clear-ui-logs">Limpar</button>
+                  </div>
+                  <ul class="ui-log-list" id="ui-log-list" aria-live="polite"></ul>
                 </div>
               </div>
             </div>

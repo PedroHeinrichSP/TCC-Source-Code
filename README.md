@@ -75,6 +75,8 @@ bash ./scripts/linux/preview.sh
 |---------|------|------|-------|
 | **blender_synthetic** | Cenas 3D Sintéticas | ~500MB | Recomendado para aprendizado |
 | **d_nerf** | Cenas dinâmicas | ~1GB | Para benchmarks temporais |
+| **mipnerf360** | Cenas reais 360° | ~7.7GB | Formato LLFF/COLMAP, cenário unbounded |
+| **tanks_and_temples** | Cenas de grande escala | ~15GB | Requer download/registro manual |
 | **custom** | Seu próprio dataset | Qualquer | Usando o formato transforms_train.json |
 
 ## ⚙️ Windows PowerShell - Comandos Comuns
@@ -171,6 +173,8 @@ python -m nvs_benchmark.cli method-run `
 
 ### Notebooks
 - `notebooks/nvs_benchmark_pipeline.ipynb` - Passo a passo completo com explicações
+- `notebooks/nvs_benchmark_colab.ipynb` - Fluxo pronto para Google Colab (setup, benchmark, relatório e download)
+- `notebooks/nvs_benchmark_colab_full_matrix.ipynb` - Execução completa (métodos x datasets) com relatório geral
 
 ### Documentação
 - `docs/FLUXO_DE_DADOS.md` - Explicação do fluxo de dados

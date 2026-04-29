@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -93,6 +94,50 @@ def _load_snapshot(snapshot_file: str | Path) -> list[MethodMetrics]:
         raise ValueError("Snapshot de metricas vazio ou sem metodos validos")
 
     return methods
+
+
+def _validate_snapshot_methods(
+    methods: list[MethodMetrics],
+    *,
+    expected_methods: list[str] | None,
+    min_methods: int | None,
+    require_finite_metrics: bool,
+) -> None:
+    """Valida cobertura e sanidade do snapshot antes de gerar ranking."""
+    if min_methods is not None and len(methods) < int(min_methods):
+        raise ValueError(
+            f"Snapshot insuficiente para gerar relatorio: {len(methods)} metodos < {int(min_methods)}"
+        )
+
+    if expected_methods:
+        present = {item.method for item in methods}
+        missing = [method for method in expected_methods if method not in present]
+        if missing:
+            raise ValueError(f"Snapshot incompleto. Metodos ausentes: {missing}")
+
+    if require_finite_metrics:
+        invalid: list[str] = []
+        for method in methods:
+            values = [
+                method.psnr,
+                method.ssim,
+                method.lpips,
+                method.fps,
+                method.vram_gb,
+                method.train_seconds,
+                method.inference_seconds,
+                method.frame_time_ms,
+                method.latency_p50_ms,
+                method.latency_p90_ms,
+                method.latency_p99_ms,
+            ]
+            if any(not math.isfinite(float(value)) for value in values):
+                invalid.append(method.method)
+
+        if invalid:
+            raise ValueError(
+                f"Snapshot contem metricas nao finitas para metodo(s): {invalid}"
+            )
 
 
 def _rank(methods: list[MethodMetrics], accessor, descending: bool) -> dict[str, int]:
@@ -410,9 +455,20 @@ def generate_comparison_reports(
     output_dir: str | Path,
     report_name: str = "benchmark_report",
     generate_pdf: bool = True,
+    strict_snapshot: bool = False,
+    expected_methods: list[str] | None = None,
+    min_methods: int | None = None,
+    require_finite_metrics: bool = False,
 ) -> dict[str, str]:
     """Gera relatórios comparativos HTML/PDF e retorna caminhos de saída."""
     methods = _load_snapshot(snapshot_file)
+    if strict_snapshot:
+        _validate_snapshot_methods(
+            methods,
+            expected_methods=expected_methods,
+            min_methods=min_methods,
+            require_finite_metrics=require_finite_metrics,
+        )
     comparison = _build_comparison(methods)
 
     root = Path(output_dir)

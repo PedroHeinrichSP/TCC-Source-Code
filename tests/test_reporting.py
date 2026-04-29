@@ -106,6 +106,41 @@ class ReportingTests(unittest.TestCase):
             self.assertTrue(html_path.exists())
             self.assertIn("method_b", result["winner"])
 
+    def test_generate_comparison_reports_strict_snapshot_requires_expected_methods(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "snapshot_strict_missing.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "method_a": {
+                            "psnr": 24.0,
+                            "ssim": 0.85,
+                            "lpips": 0.30,
+                            "fps": 12.0,
+                            "vram_gb": 7.0,
+                            "train_seconds": 90.0,
+                            "inference_seconds": 9.0,
+                            "frame_time_ms": 8.0,
+                            "latency_p50_ms": 7.0,
+                            "latency_p90_ms": 10.0,
+                            "latency_p99_ms": 14.0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                generate_comparison_reports(
+                    snapshot_file=snapshot,
+                    output_dir=root / "reports",
+                    report_name="strict_missing",
+                    generate_pdf=False,
+                    strict_snapshot=True,
+                    expected_methods=["method_a", "method_b"],
+                )
+
     def test_generate_comparison_reports_pdf_e2e(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

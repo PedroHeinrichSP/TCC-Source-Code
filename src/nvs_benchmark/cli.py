@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ from nvs_benchmark.cli_extensions import (
     validate_output_directory,
     validate_method_available,
     validate_snapshot_file,
+    validate_matrix_completeness,
     estimate_execution_time,
     print_validation_result,
     print_separator,
@@ -85,6 +87,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Não gerar relatório em PDF",
     )
     report_parser.add_argument("--log-dir", default="./logs", help="Diretório de logs estruturados")
+    report_parser.add_argument(
+        "--strict-snapshot",
+        action="store_true",
+        help="Falhar se o snapshot nao atender criterios de completude/sanidade",
+    )
+    report_parser.add_argument(
+        "--expected-methods",
+        default=None,
+        help="Lista separada por virgula de metodos esperados no snapshot",
+    )
+    report_parser.add_argument(
+        "--min-methods",
+        type=int,
+        default=None,
+        help="Quantidade minima de metodos exigida no snapshot",
+    )
+    report_parser.add_argument(
+        "--require-finite-metrics",
+        action="store_true",
+        help="Exigir metricas finitas em todos os metodos do snapshot",
+    )
+    report_parser.add_argument(
+        "--expected-matrix",
+        default=None,
+        help="Lista separada por virgula de combinacoes esperadas no formato dataset|method",
+    )
 
     docs_parser = subparsers.add_parser("docs-check", help="Auditar docstrings públicas")
     docs_parser.add_argument("--source-dir", default="./src/nvs_benchmark", help="Diretório de código-fonte")
@@ -254,6 +282,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=16,
         help="Quantidade de frames amostrados no preflight quando --validation-full nao for usado",
+    )
+    method_parser.add_argument(
+        "--strict-results",
+        action="store_true",
+        help="Falha se metricas invalidas forem detectadas (NaN/inf, pairs insuficiente, fps<=0)",
+    )
+    method_parser.add_argument(
+        "--min-required-pairs",
+        type=int,
+        default=1,
+        help="Numero minimo de pares validos exigidos quando --strict-results estiver ativo",
     )
 
     subparsers.add_parser("presets-list", help="Listar presets de iterações disponíveis")
@@ -723,6 +762,35 @@ def _load_extra(extra_json: str | None, extra_file: str | None) -> dict:
     return {}
 
 
+def _validate_real_metrics(metric: BenchmarkMetrics, min_required_pairs: int) -> str | None:
+    """Valida se as métricas representam execução real e utilizável."""
+    required_fields = {
+        "pairs": metric.pairs,
+        "psnr": metric.psnr,
+        "ssim": metric.ssim,
+        "lpips": metric.lpips,
+        "fps": metric.fps,
+        "vram_gb": metric.vram_gb,
+        "train_seconds": metric.train_seconds,
+        "inference_seconds": metric.inference_seconds,
+        "frame_time_ms": metric.frame_time_ms,
+        "latency_p50_ms": metric.latency_p50_ms,
+        "latency_p90_ms": metric.latency_p90_ms,
+        "latency_p99_ms": metric.latency_p99_ms,
+    }
+    non_finite = [name for name, value in required_fields.items() if not math.isfinite(float(value))]
+    if non_finite:
+        return f"Campos com valores nao finitos: {', '.join(non_finite)}"
+
+    if metric.pairs < float(min_required_pairs):
+        return f"Pairs insuficiente: {metric.pairs} < {min_required_pairs}"
+
+    if metric.fps <= 0.0:
+        return f"FPS invalido para resultado real: {metric.fps}"
+
+    return None
+
+
 def run_method_run(
     *,
     method_id: str,
@@ -747,6 +815,8 @@ def run_method_run(
     adaptive_preset: bool = False,
     validation_full: bool = False,
     validation_sample_size: int = 16,
+    strict_results: bool = False,
+    min_required_pairs: int = 1,
 ) -> int:
     """Executa um único método (incluindo external) em um dataset."""
     logger = RunLogger(
@@ -770,6 +840,8 @@ def run_method_run(
             "adaptive_preset": adaptive_preset,
             "validation_full": validation_full,
             "validation_sample_size": validation_sample_size,
+            "strict_results": strict_results,
+            "min_required_pairs": min_required_pairs,
         },
         log_dir=log_dir,
     )
@@ -869,12 +941,22 @@ def run_method_run(
 
         if compute_metrics and result.metrics is not None:
             metric = result.metrics
+            if strict_results:
+                validation_error = _validate_real_metrics(metric, min_required_pairs=min_required_pairs)
+                if validation_error:
+                    raise RuntimeError(f"Falha na validacao de metricas reais: {validation_error}")
             if snapshot_file:
                 _save_method_metric_snapshot(
                     metric=metric,
                     snapshot_file=snapshot_file,
                     append=append_snapshot,
                 )
+                if strict_results:
+                    snapshot_validation = validate_snapshot_file(snapshot_file, must_exist=True)
+                    if not snapshot_validation.is_valid:
+                        raise RuntimeError(
+                            f"Falha ao validar snapshot apos method-run: {snapshot_validation.message}"
+                        )
             logger.event(
                 "metrics_computed",
                 {
@@ -897,6 +979,9 @@ def run_method_run(
             )
             if snapshot_file:
                 print(f"Snapshot atualizado em: {snapshot_file}")
+
+        if compute_metrics and strict_results and result.metrics is None:
+            raise RuntimeError("Falha na validacao de metricas reais: metodo nao retornou metricas.")
 
         logger.finish("success")
         print("Execucao concluida com sucesso.")
@@ -974,7 +1059,18 @@ def run_ui_preview(host: str, port: int, no_browser: bool, metrics_file: str, sc
     return 0
 
 
-def run_report_generate(snapshot_file: str, output_dir: str, report_name: str, no_pdf: bool, log_dir: str) -> int:
+def run_report_generate(
+    snapshot_file: str,
+    output_dir: str,
+    report_name: str,
+    no_pdf: bool,
+    log_dir: str,
+    strict_snapshot: bool = False,
+    expected_methods: str | None = None,
+    min_methods: int | None = None,
+    require_finite_metrics: bool = False,
+    expected_matrix: str | None = None,
+) -> int:
     """Gera relatório comparativo a partir de um snapshot."""
     logger = RunLogger(
         command="report-generate",
@@ -984,16 +1080,41 @@ def run_report_generate(snapshot_file: str, output_dir: str, report_name: str, n
             "report_name": report_name,
             "no_pdf": no_pdf,
             "log_dir": log_dir,
+            "strict_snapshot": strict_snapshot,
+            "expected_methods": expected_methods,
+            "min_methods": min_methods,
+            "require_finite_metrics": require_finite_metrics,
+            "expected_matrix": expected_matrix,
         },
         log_dir=log_dir,
     )
     try:
         logger.event("run_started")
+        parsed_expected_methods: list[str] | None = None
+        if expected_methods:
+            parsed_expected_methods = [item.strip() for item in expected_methods.split(",") if item.strip()]
+
+        if strict_snapshot and expected_matrix:
+            matrix_result = validate_matrix_completeness(
+                snapshot_file,
+                expected_combos=[item.strip() for item in expected_matrix.split(",") if item.strip()],
+                strict=True,
+            )
+            if not matrix_result.is_valid:
+                print(matrix_result.message)
+                print_validation_result(matrix_result, verbose=True)
+                logger.finish("failed", {"error": matrix_result.message, "details": matrix_result.details})
+                return 1
+
         result = generate_comparison_reports(
             snapshot_file=snapshot_file,
             output_dir=output_dir,
             report_name=report_name,
             generate_pdf=not no_pdf,
+            strict_snapshot=strict_snapshot,
+            expected_methods=parsed_expected_methods,
+            min_methods=min_methods,
+            require_finite_metrics=require_finite_metrics,
         )
         logger.finish("success", result)
         print(f"Vencedor geral (rank medio): {result['winner']}")
@@ -1354,6 +1475,11 @@ def main() -> int:
             report_name=args.report_name,
             no_pdf=args.no_pdf,
             log_dir=args.log_dir,
+            strict_snapshot=args.strict_snapshot,
+            expected_methods=args.expected_methods,
+            min_methods=args.min_methods,
+            require_finite_metrics=args.require_finite_metrics,
+            expected_matrix=args.expected_matrix,
         )
     if args.command == "docs-check":
         return run_docs_check(
@@ -1393,6 +1519,8 @@ def main() -> int:
             adaptive_preset=args.adaptive_preset,
             validation_full=args.validation_full,
             validation_sample_size=args.validation_sample_size,
+            strict_results=args.strict_results,
+            min_required_pairs=args.min_required_pairs,
         )
     if args.command == "presets-list":
         summaries = list_preset_summaries()

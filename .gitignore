@@ -46,3 +46,6 @@ logs/
 !logs/.gitkeep
 
 !src/nvs_benchmark/.gitkeep
+
+.agents/
+.github/instructions/

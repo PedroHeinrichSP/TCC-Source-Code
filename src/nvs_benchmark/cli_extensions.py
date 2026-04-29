@@ -25,6 +25,86 @@ class ValidationResult:
     details: Optional[Dict[str, Any]] = None
 
 
+def _normalize_matrix_key(key: str) -> tuple[str, str] | None:
+    """Normaliza chave de snapshot no formato dataset|method."""
+    if "|" not in key:
+        return None
+    dataset, method = key.split("|", 1)
+    dataset = dataset.strip()
+    method = method.strip()
+    if not dataset or not method:
+        return None
+    return dataset, method
+
+
+def validate_matrix_completeness(
+    snapshot_payload: dict[str, Any] | str | Path,
+    *,
+    expected_combos: list[str],
+    strict: bool = True,
+) -> ValidationResult:
+    """Valida se um snapshot consolidado cobre todas as combinacoes esperadas."""
+    try:
+        if isinstance(snapshot_payload, (str, Path)):
+            payload = json.loads(Path(snapshot_payload).read_text(encoding="utf-8-sig"))
+        else:
+            payload = snapshot_payload
+    except Exception as exc:
+        return ValidationResult(
+            is_valid=False,
+            message=f"Snapshot de matriz invalido: {exc}",
+        )
+
+    if not isinstance(payload, dict):
+        return ValidationResult(
+            is_valid=False,
+            message="Snapshot de matriz invalido: esperado objeto JSON por combinacao",
+        )
+
+    present = set()
+    invalid_keys: list[str] = []
+    for raw_key in payload.keys():
+        normalized = _normalize_matrix_key(str(raw_key))
+        if normalized is None:
+            invalid_keys.append(str(raw_key))
+            continue
+        present.add(f"{normalized[0]}|{normalized[1]}")
+
+    expected = [item.strip() for item in expected_combos if item and item.strip()]
+    missing = [combo for combo in expected if combo not in present]
+    unexpected = sorted(item for item in present if item not in expected)
+
+    is_valid = not invalid_keys and not missing and (not strict or not unexpected)
+    details = {
+        "expected_count": len(expected),
+        "present_count": len(present),
+        "missing_combos": missing,
+        "unexpected_combos": unexpected,
+        "invalid_keys": invalid_keys,
+    }
+
+    if is_valid:
+        return ValidationResult(
+            is_valid=True,
+            message="Snapshot consolidado cobre todas as combinacoes esperadas",
+            details=details,
+        )
+
+    problems = []
+    if invalid_keys:
+        problems.append(f"chaves_invalidas={invalid_keys}")
+    if missing:
+        problems.append(f"faltando={missing}")
+    if strict and unexpected:
+        problems.append(f"inesperadas={unexpected}")
+
+    return ValidationResult(
+        is_valid=False,
+        message="Snapshot consolidado incompleto: " + "; ".join(problems),
+        details=details,
+    )
+
+
 def validate_dataset_path(dataset_name: str, root: str) -> ValidationResult:
     """Valida se um caminho de dataset existe e contém arquivos esperados."""
     root_path = Path(root)

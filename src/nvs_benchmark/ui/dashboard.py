@@ -41,6 +41,19 @@ def _to_web_path(path: Path, base_dir: Path) -> str:
     return "/" + rel.as_posix()
 
 
+def _images_in_directory(path: Path, limit: int = 60) -> list[Path]:
+    """Collect a capped, sorted list of image files from a directory."""
+    if not path.exists() or not path.is_dir():
+        return []
+
+    images: list[Path] = []
+    for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        images.extend(sorted(path.glob(pattern)))
+
+    images = sorted(images)
+    return images[: max(1, int(limit))]
+
+
 def _discover_scenes(base_dir: Path) -> list[dict]:
     """Discover scene transforms and frame files under data/ for quick testing."""
     data_root = base_dir / "data"
@@ -112,6 +125,50 @@ def _discover_scenes(base_dir: Path) -> list[dict]:
             )
         else:
             existing["splits"].append(split_entry)
+
+    # Support datasets that expose frames in images/ without transforms_*.json
+    # (e.g., LLFF/COLMAP layouts used by mipnerf360 and tanks_and_temples).
+    image_dirs = sorted(data_root.rglob("images"))
+    for image_dir in image_dirs:
+        scene_dir = image_dir.parent
+        scene_id = scene_dir.as_posix()
+        existing = next((item for item in scenes if item["id"] == scene_id), None)
+
+        image_files = _images_in_directory(image_dir, limit=60)
+        if not image_files:
+            continue
+
+        split_frames: list[dict] = []
+        for index, image_path in enumerate(image_files):
+            try:
+                web_path = _to_web_path(image_path, base_dir)
+            except Exception:
+                continue
+            split_frames.append(
+                {
+                    "label": f"{index:03d} - {image_path.name}",
+                    "web_path": web_path,
+                }
+            )
+
+        if not split_frames:
+            continue
+
+        split_entry = {"name": "images", "frames": split_frames}
+        if existing is None:
+            scenes.append(
+                {
+                    "id": scene_id,
+                    "label": scene_dir.name,
+                    "transforms": None,
+                    "splits": [split_entry],
+                }
+            )
+            continue
+
+        existing_splits = existing.get("splits", [])
+        if not any(str(item.get("name")) == "images" for item in existing_splits if isinstance(item, dict)):
+            existing_splits.append(split_entry)
 
     return scenes
 

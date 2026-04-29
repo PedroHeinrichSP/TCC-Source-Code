@@ -63,9 +63,16 @@ const activeMetrics = document.getElementById('active-metrics');
 const panelCollapse = document.getElementById('panel-collapse');
 const panelBody = document.getElementById('panel-body');
 const snapOverlay = document.getElementById('snap-overlay');
+const uiStatusDot = document.getElementById('ui-status-dot');
+const uiStatusText = document.getElementById('ui-status-text');
+const uiStatusTime = document.getElementById('ui-status-time');
+const uiStatusProgress = document.getElementById('ui-status-progress');
+const uiLogList = document.getElementById('ui-log-list');
+const clearUiLogsBtn = document.getElementById('clear-ui-logs');
 const windowElements = Array.from(document.querySelectorAll('.os-window'));
 
 const WINDOW_LAYOUT_KEY = 'nvs-window-layout-v1';
+const UI_PREFS_KEY = 'nvs-ui-prefs-v1';
 const SNAP_THRESHOLD = 30;
 const CORNER_SNAP_RATIO = 0.5;
 
@@ -112,6 +119,11 @@ const state = {
     lastMetricsMtime: null,
     tickCount: 0,
   },
+  uiRuntime: {
+    nextTaskId: 1,
+    activeTasks: new Map(),
+    logs: [],
+  },
 };
 
 const WINDOW_TITLES = {
@@ -120,6 +132,160 @@ const WINDOW_TITLES = {
   controls: 'Controles rapidos',
   panels: 'Paineis',
   install: 'Instalacao',
+};
+
+const uiPrefs = {
+  data: null,
+};
+
+const loadUiPrefs = () => {
+  if (uiPrefs.data) return uiPrefs.data;
+  try {
+    const raw = localStorage.getItem(UI_PREFS_KEY);
+    uiPrefs.data = raw ? JSON.parse(raw) : {};
+  } catch {
+    uiPrefs.data = {};
+  }
+  return uiPrefs.data;
+};
+
+const saveUiPrefs = (patch = {}) => {
+  const current = { ...loadUiPrefs(), ...patch };
+  uiPrefs.data = current;
+  localStorage.setItem(UI_PREFS_KEY, JSON.stringify(current));
+};
+
+const setButtonBusy = (button, busy, busyLabel = 'Processando...') => {
+  if (!button) return;
+  if (!button.dataset.originalLabel) {
+    button.dataset.originalLabel = button.textContent || '';
+  }
+  button.disabled = !!busy;
+  button.classList.toggle('is-loading', !!busy);
+  button.textContent = busy ? busyLabel : button.dataset.originalLabel;
+};
+
+const debounce = (fn, delayMs = 300) => {
+  let timer = null;
+  return (...args) => {
+    if (timer) {
+      window.clearTimeout(timer);
+    }
+    timer = window.setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, delayMs);
+  };
+};
+
+const saveCurrentUiSelections = () => {
+  saveUiPrefs({
+    primaryMethod: primarySelect?.value || '',
+    secondaryMethod: secondarySelect?.value || '',
+    renderMethod: renderMethodSelect?.value || '',
+    panelMethod: panelMethodSelect?.value || '',
+    cameraPreviewMode: cameraPreviewModeSelect?.value || 'auto',
+    autoCameraPreview: !!autoCameraPreviewToggle?.checked,
+    refreshIntervalSec: Number(sliderRefreshInterval?.value || state.tuning.refreshIntervalSec || 9),
+    renderScalePercent: Number(sliderRenderScale?.value || state.tuning.renderScalePercent || 100),
+    spatialRefreshEvery: Number(sliderSpatialRefresh?.value || state.tuning.spatialRefreshEvery || 1),
+    historyFilters: {
+      method: historyFilterMethod?.value || '',
+      status: historyFilterStatus?.value || '',
+      dataset: (historyFilterDataset?.value || '').trim(),
+    },
+    sceneSelection: {
+      sceneId: state.selectedSceneId || '',
+      split: sceneSplitSelect?.value || '',
+      frame: sceneFrameSelect?.value || '',
+    },
+  });
+};
+
+const formatNowTime = () => {
+  const now = new Date();
+  return now.toLocaleTimeString('pt-BR', { hour12: false });
+};
+
+const setUiStatus = (message, level = 'info') => {
+  if (uiStatusText) {
+    uiStatusText.textContent = message;
+  }
+  if (uiStatusTime) {
+    uiStatusTime.textContent = formatNowTime();
+  }
+  if (uiStatusDot) {
+    uiStatusDot.classList.remove('warn', 'error');
+    if (level === 'warn') {
+      uiStatusDot.classList.add('warn');
+    }
+    if (level === 'error') {
+      uiStatusDot.classList.add('error');
+    }
+  }
+};
+
+const renderUiLogs = () => {
+  if (!uiLogList) return;
+  uiLogList.innerHTML = '';
+  if (!state.uiRuntime.logs.length) {
+    const empty = document.createElement('li');
+    empty.className = 'ui-log-item info';
+    empty.innerHTML = '<span class="meta">--</span> Nenhum evento recente.';
+    uiLogList.appendChild(empty);
+    return;
+  }
+  state.uiRuntime.logs.forEach((entry) => {
+    const item = document.createElement('li');
+    item.className = `ui-log-item ${entry.level}`;
+    item.innerHTML = `<span class="meta">${entry.time}</span> ${entry.message}`;
+    uiLogList.appendChild(item);
+  });
+};
+
+const pushUiLog = (level, message) => {
+  const normalizedLevel = ['info', 'success', 'warn', 'error'].includes(level) ? level : 'info';
+  state.uiRuntime.logs.unshift({
+    level: normalizedLevel,
+    message: String(message || ''),
+    time: formatNowTime(),
+  });
+  state.uiRuntime.logs = state.uiRuntime.logs.slice(0, 40);
+  renderUiLogs();
+};
+
+const updateUiLoadingIndicator = () => {
+  if (!uiStatusProgress) return;
+  const hasActive = state.uiRuntime.activeTasks.size > 0;
+  uiStatusProgress.classList.toggle('is-active', hasActive);
+  if (!hasActive) {
+    uiStatusProgress.style.width = '0%';
+  }
+};
+
+const beginUiTask = (label) => {
+  const id = state.uiRuntime.nextTaskId;
+  state.uiRuntime.nextTaskId += 1;
+  state.uiRuntime.activeTasks.set(id, { label: String(label || 'Processando') });
+  setUiStatus(`${label}...`, 'info');
+  updateUiLoadingIndicator();
+  return id;
+};
+
+const endUiTask = (id, { ok = true, message = '' } = {}) => {
+  const task = state.uiRuntime.activeTasks.get(id);
+  state.uiRuntime.activeTasks.delete(id);
+  updateUiLoadingIndicator();
+
+  const fallback = ok ? 'Operacao concluida.' : 'Operacao falhou.';
+  const finalMessage = String(message || fallback);
+  if (ok) {
+    setUiStatus(finalMessage, 'info');
+    pushUiLog('success', `${task?.label || 'Operacao'}: ${finalMessage}`);
+  } else {
+    setUiStatus(finalMessage, 'error');
+    pushUiLog('error', `${task?.label || 'Operacao'}: ${finalMessage}`);
+  }
 };
 
 const toFiniteNumber = (value) => {
@@ -366,6 +532,7 @@ const loadPreviewState = async () => {
     const response = await fetch('/api/preview-state', { cache: 'no-store' });
     if (!response.ok) {
       renderPreviewStateSummary({ available: false });
+      setUiStatus('Preview espacial indisponivel no momento.', 'warn');
       return null;
     }
     const payload = await response.json();
@@ -373,16 +540,20 @@ const loadPreviewState = async () => {
     return payload;
   } catch {
     renderPreviewStateSummary({ available: false });
+    setUiStatus('Falha ao ler estado do preview espacial.', 'error');
     return null;
   }
 };
 
-const requestCameraRender = async ({ quality = 'manual', width = 960, height = 540 } = {}) => {
+const requestCameraRender = async ({ quality = 'manual', width = 960, height = 540, previewMode } = {}) => {
   if (state.cameraRenderBusy) return;
   state.cameraRenderBusy = true;
   if (renderAtCameraBtn) {
     renderAtCameraBtn.disabled = true;
   }
+
+  const shouldLogTask = quality === 'manual';
+  const taskId = shouldLogTask ? beginUiTask('Render da camera') : null;
 
   try {
     const scaled = scaleRenderSize(width, height);
@@ -394,7 +565,7 @@ const requestCameraRender = async ({ quality = 'manual', width = 960, height = 5
         width: scaled.width,
         height: scaled.height,
         method_id: renderMethodSelect?.value || primarySelect.value || '',
-        preview_mode: cameraPreviewModeSelect?.value || 'auto',
+        preview_mode: previewMode || cameraPreviewModeSelect?.value || 'auto',
       }),
     });
     const payload = await response.json();
@@ -403,6 +574,9 @@ const requestCameraRender = async ({ quality = 'manual', width = 960, height = 5
       renderFallback.textContent = `Falha ao renderizar camera atual: ${reason}`;
       renderFallback.classList.remove('hidden');
       renderImage.classList.add('hidden');
+      if (taskId !== null) {
+        endUiTask(taskId, { ok: false, message: `Falha ao renderizar camera: ${reason}` });
+      }
       return;
     }
 
@@ -411,6 +585,9 @@ const requestCameraRender = async ({ quality = 'manual', width = 960, height = 5
       renderFallback.textContent = 'Render de camera nao retornou imagem.';
       renderFallback.classList.remove('hidden');
       renderImage.classList.add('hidden');
+      if (taskId !== null) {
+        endUiTask(taskId, { ok: false, message: 'Render sem imagem de retorno.' });
+      }
       return;
     }
 
@@ -429,10 +606,16 @@ const requestCameraRender = async ({ quality = 'manual', width = 960, height = 5
     renderStatus.textContent = quality === 'manual'
       ? `Render no ponto atual concluido (${source}).`
       : `Preview automatico atualizado (${source}).`;
+    if (taskId !== null) {
+      endUiTask(taskId, { ok: true, message: `Render concluido (${source}).` });
+    }
   } catch {
     renderFallback.textContent = 'Falha de rede ao renderizar camera atual.';
     renderFallback.classList.remove('hidden');
     renderImage.classList.add('hidden');
+    if (taskId !== null) {
+      endUiTask(taskId, { ok: false, message: 'Falha de rede ao renderizar camera.' });
+    }
   } finally {
     state.cameraRenderBusy = false;
     if (renderAtCameraBtn) {
@@ -970,6 +1153,7 @@ const selectedSceneSplit = () => {
 const populateSceneControls = (scenes) => {
   state.scenes = Array.isArray(scenes) ? scenes : [];
   sceneDatasetSelect.innerHTML = '';
+  const prefs = loadUiPrefs();
 
   if (!state.scenes.length) {
     sceneDatasetSelect.disabled = true;
@@ -992,7 +1176,9 @@ const populateSceneControls = (scenes) => {
     sceneDatasetSelect.appendChild(option);
   });
 
-  state.selectedSceneId = state.scenes[0].id;
+  const preferredSceneId = String(prefs?.sceneSelection?.sceneId || '');
+  const hasPreferredScene = state.scenes.some((scene) => scene.id === preferredSceneId);
+  state.selectedSceneId = hasPreferredScene ? preferredSceneId : state.scenes[0].id;
   sceneDatasetSelect.value = state.selectedSceneId;
   sceneDatasetSelect.disabled = false;
   loadSceneBtn.disabled = false;
@@ -1001,6 +1187,7 @@ const populateSceneControls = (scenes) => {
 
 const refreshSceneSplitOptions = () => {
   const scene = selectedScene();
+  const prefs = loadUiPrefs();
   sceneSplitSelect.innerHTML = '';
   if (!scene || !Array.isArray(scene.splits) || !scene.splits.length) {
     sceneSplitSelect.disabled = true;
@@ -1017,12 +1204,15 @@ const refreshSceneSplitOptions = () => {
     sceneSplitSelect.appendChild(option);
   });
   sceneSplitSelect.disabled = false;
-  sceneSplitSelect.value = scene.splits[0].name;
+  const preferredSplit = String(prefs?.sceneSelection?.split || '');
+  const hasPreferredSplit = scene.splits.some((split) => split.name === preferredSplit);
+  sceneSplitSelect.value = hasPreferredSplit ? preferredSplit : scene.splits[0].name;
   refreshSceneFrameOptions();
 };
 
 const refreshSceneFrameOptions = () => {
   const split = selectedSceneSplit();
+  const prefs = loadUiPrefs();
   sceneFrameSelect.innerHTML = '';
   if (!split || !Array.isArray(split.frames) || !split.frames.length) {
     sceneFrameSelect.disabled = true;
@@ -1037,10 +1227,13 @@ const refreshSceneFrameOptions = () => {
     sceneFrameSelect.appendChild(option);
   });
   sceneFrameSelect.disabled = false;
-  sceneFrameSelect.value = split.frames[0].web_path;
+  const preferredFrame = String(prefs?.sceneSelection?.frame || '');
+  const hasPreferredFrame = split.frames.some((frame) => frame.web_path === preferredFrame);
+  sceneFrameSelect.value = hasPreferredFrame ? preferredFrame : split.frames[0].web_path;
+  saveCurrentUiSelections();
 };
 
-const loadSelectedSceneFrame = () => {
+const loadSelectedSceneFrame = async () => {
   const scene = selectedScene();
   const split = selectedSceneSplit();
   const framePath = sceneFrameSelect?.value || '';
@@ -1052,15 +1245,29 @@ const loadSelectedSceneFrame = () => {
     return;
   }
 
-  renderImage.src = framePath;
-  renderImage.alt = `Cena ${scene.label || scene.id} - ${split.name}`;
-  state.renderMode = 'dataset';
-  renderStatus.textContent = `Cena: ${scene.label || scene.id} | Split: ${split.name}`;
-  renderFallback.textContent = `A imagem selecionada nao pode ser carregada: ${framePath}`;
+  const methodId = renderMethodSelect?.value || primarySelect.value || '';
+  if (!methodId) {
+    renderFallback.textContent = 'Selecione um metodo treinado para gerar o preview do modelo.';
+    renderFallback.classList.remove('hidden');
+    renderImage.classList.add('hidden');
+    renderStatus.textContent = 'Nenhum metodo selecionado para preview do modelo.';
+    return;
+  }
+
+    renderStatus.textContent = `Gerando preview do modelo ${getMethodLabel(methodId)} para ${scene.label || scene.id} (${split.name})...`;
+  renderFallback.textContent = 'Nao foi possivel carregar preview do modelo treinado para a cena selecionada.';
+
+  setButtonBusy(loadSceneBtn, true, 'Gerando preview...');
+  try {
+    await requestCameraRender({ quality: 'manual', width: 1280, height: 720, previewMode: 'artifact' });
+  } finally {
+    setButtonBusy(loadSceneBtn, false);
+  }
 
   openWindow('render');
   focusWindow('render');
   openWindow('preview');
+  saveCurrentUiSelections();
 };
 
 const installItem = async (itemId) => {
@@ -1770,6 +1977,9 @@ const initWindowManager = () => {
 };
 
 const main = async () => {
+  setUiStatus('Inicializando dashboard...');
+  const bootTaskId = beginUiTask('Inicializacao da interface');
+  renderUiLogs();
   initTheme();
   initWindowManager();
 
@@ -1793,6 +2003,7 @@ const main = async () => {
 
   if (metricsResult.status === 'rejected' && !state.metricsError) {
     state.metricsError = 'Nao foi possivel carregar metricas.';
+    pushUiLog('warn', 'Falha ao carregar metricas iniciais.');
   }
 
   state.metrics = Object.fromEntries(
@@ -1821,12 +2032,28 @@ const main = async () => {
   populateSelect(renderMethodSelect, selectableMethods, 'Nenhum modelo instalado');
   populateSelect(panelMethodSelect, selectableMethods, 'Nenhum modelo instalado');
 
+  const prefs = loadUiPrefs();
+
   if (selectableMethods.length) {
-    primarySelect.value = selectableMethods[0];
+    const preferredPrimary = String(prefs?.primaryMethod || '');
+    const preferredSecondary = String(prefs?.secondaryMethod || '');
+    const preferredRender = String(prefs?.renderMethod || '');
+    const preferredPanel = String(prefs?.panelMethod || '');
+
+    primarySelect.value = selectableMethods.includes(preferredPrimary) ? preferredPrimary : selectableMethods[0];
     if (renderMethodSelect) {
-      renderMethodSelect.value = selectableMethods[0];
+      renderMethodSelect.value = selectableMethods.includes(preferredRender)
+        ? preferredRender
+        : primarySelect.value;
     }
-    secondarySelect.value = selectableMethods[1] || selectableMethods[0];
+    secondarySelect.value = selectableMethods.includes(preferredSecondary)
+      ? preferredSecondary
+      : (selectableMethods[1] || selectableMethods[0]);
+    if (panelMethodSelect) {
+      panelMethodSelect.value = selectableMethods.includes(preferredPanel)
+        ? preferredPanel
+        : primarySelect.value;
+    }
   }
 
   const hasMethods = selectableMethods.length > 0;
@@ -1857,16 +2084,56 @@ const main = async () => {
 
   state.autoCameraPreviewEnabled = !!autoCameraPreviewToggle?.checked;
   state.cameraPreviewMode = cameraPreviewModeSelect?.value || 'auto';
+
+  if (cameraPreviewModeSelect && prefs?.cameraPreviewMode) {
+    cameraPreviewModeSelect.value = String(prefs.cameraPreviewMode);
+    state.cameraPreviewMode = cameraPreviewModeSelect.value;
+  }
+  if (autoCameraPreviewToggle && typeof prefs?.autoCameraPreview === 'boolean') {
+    autoCameraPreviewToggle.checked = !!prefs.autoCameraPreview;
+    state.autoCameraPreviewEnabled = !!prefs.autoCameraPreview;
+  }
+
   state.tuning.refreshIntervalSec = Number(sliderRefreshInterval?.value || 9);
   state.tuning.renderScalePercent = Number(sliderRenderScale?.value || 100);
   state.tuning.spatialRefreshEvery = Number(sliderSpatialRefresh?.value || 1);
+
+  if (sliderRefreshInterval && Number.isFinite(Number(prefs?.refreshIntervalSec))) {
+    sliderRefreshInterval.value = String(Number(prefs.refreshIntervalSec));
+    state.tuning.refreshIntervalSec = Number(sliderRefreshInterval.value);
+  }
+  if (sliderRenderScale && Number.isFinite(Number(prefs?.renderScalePercent))) {
+    sliderRenderScale.value = String(Number(prefs.renderScalePercent));
+    state.tuning.renderScalePercent = Number(sliderRenderScale.value);
+  }
+  if (sliderSpatialRefresh && Number.isFinite(Number(prefs?.spatialRefreshEvery))) {
+    sliderSpatialRefresh.value = String(Number(prefs.spatialRefreshEvery));
+    state.tuning.spatialRefreshEvery = Number(sliderSpatialRefresh.value);
+  }
+
+  if (historyFilterMethod && prefs?.historyFilters?.method) {
+    historyFilterMethod.value = String(prefs.historyFilters.method);
+    state.experimentsFilters.method = historyFilterMethod.value;
+  }
+  if (historyFilterStatus && prefs?.historyFilters?.status) {
+    historyFilterStatus.value = String(prefs.historyFilters.status);
+    state.experimentsFilters.status = historyFilterStatus.value;
+  }
+  if (historyFilterDataset && prefs?.historyFilters?.dataset) {
+    historyFilterDataset.value = String(prefs.historyFilters.dataset);
+    state.experimentsFilters.dataset = historyFilterDataset.value.trim();
+  }
+
   if (sliderRefreshIntervalValue) sliderRefreshIntervalValue.textContent = String(state.tuning.refreshIntervalSec);
   if (sliderRenderScaleValue) sliderRenderScaleValue.textContent = String(state.tuning.renderScalePercent);
   if (sliderSpatialRefreshValue) sliderSpatialRefreshValue.textContent = String(state.tuning.spatialRefreshEvery);
   setFineTuneTab('sliders');
+  saveCurrentUiSelections();
   startTrainingSyncLoop();
   await syncTrainingState({ force: true });
   await maybeAutoCameraPreview({ force: true });
+  endUiTask(bootTaskId, { ok: true, message: 'Dashboard pronto para uso.' });
+  pushUiLog('info', 'Interface carregada e sincronizada.');
 };
 
 panelCollapse?.addEventListener('click', () => {
@@ -1881,6 +2148,7 @@ primarySelect.addEventListener('change', () => {
   state.renderMode = 'method';
   updateRender();
   updateActiveMetrics();
+  saveCurrentUiSelections();
 });
 
 renderMethodSelect?.addEventListener('change', () => {
@@ -1890,13 +2158,19 @@ renderMethodSelect?.addEventListener('change', () => {
   state.renderMode = 'method';
   updateRender();
   updateActiveMetrics();
+  saveCurrentUiSelections();
 });
 
 renderAtCameraBtn?.addEventListener('click', async () => {
-  await requestCameraRender({ quality: 'manual', width: 1280, height: 720 });
-  await syncTrainingState({ force: true });
-  openWindow('render');
-  focusWindow('render');
+  setButtonBusy(renderAtCameraBtn, true, 'Renderizando...');
+  try {
+    await requestCameraRender({ quality: 'manual', width: 1280, height: 720 });
+    await syncTrainingState({ force: true });
+    openWindow('render');
+    focusWindow('render');
+  } finally {
+    setButtonBusy(renderAtCameraBtn, false);
+  }
 });
 
 autoCameraPreviewToggle?.addEventListener('change', async () => {
@@ -1904,10 +2178,12 @@ autoCameraPreviewToggle?.addEventListener('change', async () => {
   if (state.autoCameraPreviewEnabled) {
     await maybeAutoCameraPreview({ force: true });
   }
+  saveCurrentUiSelections();
 });
 
 cameraPreviewModeSelect?.addEventListener('change', () => {
   state.cameraPreviewMode = cameraPreviewModeSelect.value || 'auto';
+  saveCurrentUiSelections();
 });
 
 fineTuneTabButtons.forEach((button) => {
@@ -1923,6 +2199,7 @@ sliderRefreshInterval?.addEventListener('input', () => {
     sliderRefreshIntervalValue.textContent = String(state.tuning.refreshIntervalSec);
   }
   startTrainingSyncLoop();
+  saveCurrentUiSelections();
 });
 
 sliderRenderScale?.addEventListener('input', () => {
@@ -1930,6 +2207,7 @@ sliderRenderScale?.addEventListener('input', () => {
   if (sliderRenderScaleValue) {
     sliderRenderScaleValue.textContent = String(state.tuning.renderScalePercent);
   }
+  saveCurrentUiSelections();
 });
 
 sliderSpatialRefresh?.addEventListener('input', () => {
@@ -1937,13 +2215,16 @@ sliderSpatialRefresh?.addEventListener('input', () => {
   if (sliderSpatialRefreshValue) {
     sliderSpatialRefreshValue.textContent = String(state.tuning.spatialRefreshEvery);
   }
+  saveCurrentUiSelections();
 });
 
 refreshPreviewStateBtn?.addEventListener('click', async () => {
+  pushUiLog('info', 'Atualizacao manual do estado do preview solicitada.');
   await loadPreviewState();
 });
 
 loadPreviewStateBtn?.addEventListener('click', async () => {
+  pushUiLog('info', 'Leitura manual da camera do preview solicitada.');
   await loadPreviewState();
 });
 
@@ -1954,6 +2235,7 @@ refreshSpatialPreviewBtn?.addEventListener('click', async () => {
 
 secondarySelect.addEventListener('change', () => {
   updateActiveMetrics();
+  saveCurrentUiSelections();
 });
 
 addPanelBtn.addEventListener('click', () => {
@@ -1963,6 +2245,7 @@ addPanelBtn.addEventListener('click', () => {
     state.panels.push(methodId);
     renderPanelGrid();
   }
+  saveCurrentUiSelections();
 });
 
 resetPanelsBtn.addEventListener('click', () => {
@@ -1974,8 +2257,9 @@ resetLayoutBtn?.addEventListener('click', () => {
   resetWindowLayout();
 });
 
-loadSceneBtn?.addEventListener('click', () => {
-  loadSelectedSceneFrame();
+loadSceneBtn?.addEventListener('click', async () => {
+  pushUiLog('info', 'Solicitado preview do modelo para cena selecionada.');
+  await loadSelectedSceneFrame();
 });
 
 liveRenderBtn?.addEventListener('click', () => {
@@ -1988,11 +2272,29 @@ generateReportBtn?.addEventListener('click', () => {
 });
 
 refreshHistoryBtn?.addEventListener('click', async () => {
-  await syncTrainingState({ force: true });
+  setButtonBusy(refreshHistoryBtn, true, 'Atualizando...');
+  const taskId = beginUiTask('Atualizacao de historico');
+  try {
+    await syncTrainingState({ force: true });
+    endUiTask(taskId, { ok: true, message: 'Historico atualizado.' });
+  } catch {
+    endUiTask(taskId, { ok: false, message: 'Falha ao atualizar historico.' });
+  } finally {
+    setButtonBusy(refreshHistoryBtn, false);
+  }
 });
 
 compareSelectedBtn?.addEventListener('click', async () => {
-  await requestExperimentsComparison();
+  setButtonBusy(compareSelectedBtn, true, 'Gerando comparacao...');
+  const taskId = beginUiTask('Comparacao de experimentos');
+  try {
+    await requestExperimentsComparison();
+    endUiTask(taskId, { ok: true, message: 'Relatorio de comparacao gerado.' });
+  } catch {
+    endUiTask(taskId, { ok: false, message: 'Falha ao gerar comparacao.' });
+  } finally {
+    setButtonBusy(compareSelectedBtn, false);
+  }
 });
 
 historyFilterMethod?.addEventListener('change', async () => {
@@ -2002,6 +2304,7 @@ historyFilterMethod?.addEventListener('change', async () => {
   state.selectedRunIds.clear();
   renderExperimentHistory();
   await refreshTimeline();
+  saveCurrentUiSelections();
 });
 
 historyFilterStatus?.addEventListener('change', async () => {
@@ -2011,16 +2314,26 @@ historyFilterStatus?.addEventListener('change', async () => {
   state.selectedRunIds.clear();
   renderExperimentHistory();
   await refreshTimeline();
+  saveCurrentUiSelections();
 });
 
-historyFilterDataset?.addEventListener('change', async () => {
+const applyHistoryDatasetFilter = async () => {
   state.experimentsFilters.dataset = (historyFilterDataset.value || '').trim();
   const items = await loadExperiments(state.experimentsFilters);
   state.experiments = items;
   state.selectedRunIds.clear();
   renderExperimentHistory();
   await refreshTimeline();
+  saveCurrentUiSelections();
+};
+
+historyFilterDataset?.addEventListener('change', async () => {
+  await applyHistoryDatasetFilter();
 });
+
+historyFilterDataset?.addEventListener('input', debounce(async () => {
+  await applyHistoryDatasetFilter();
+}, 350));
 
 historyTabButtons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -2030,8 +2343,14 @@ historyTabButtons.forEach((button) => {
 });
 
 refreshTimelineBtn?.addEventListener('click', async () => {
-  await refreshTimeline();
-  await maybeAutoCameraPreview({ force: true });
+  const taskId = beginUiTask('Atualizacao da serie temporal');
+  try {
+    await refreshTimeline();
+    await maybeAutoCameraPreview({ force: true });
+    endUiTask(taskId, { ok: true, message: 'Serie temporal atualizada.' });
+  } catch {
+    endUiTask(taskId, { ok: false, message: 'Falha ao atualizar serie temporal.' });
+  }
 });
 
 timelineMetricSelect?.addEventListener('change', async () => {
@@ -2050,6 +2369,7 @@ themeToggle.addEventListener('change', (event) => {
   } else {
     setTheme(value);
   }
+  pushUiLog('info', `Tema alterado para ${value}.`);
 });
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (event) => {
@@ -2066,10 +2386,23 @@ window.addEventListener('resize', () => {
 sceneDatasetSelect?.addEventListener('change', () => {
   state.selectedSceneId = sceneDatasetSelect.value;
   refreshSceneSplitOptions();
+  saveCurrentUiSelections();
+  pushUiLog('info', 'Dataset/cena selecionado(a) alterado(a).');
 });
 
 sceneSplitSelect?.addEventListener('change', () => {
   refreshSceneFrameOptions();
+  saveCurrentUiSelections();
+});
+
+sceneFrameSelect?.addEventListener('change', () => {
+  saveCurrentUiSelections();
+});
+
+clearUiLogsBtn?.addEventListener('click', () => {
+  state.uiRuntime.logs = [];
+  renderUiLogs();
+  setUiStatus('Logs da interface limpos.');
 });
 
 main();

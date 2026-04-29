@@ -66,10 +66,11 @@ scripts/colab/
 **Início Rápido:**
 1. Abra o [Google Colab](https://colab.research.google.com/)
 2. Crie um novo notebook
-3. Na primeira célula, cole e execute:
+3. Use preferencialmente o notebook dedicado: `notebooks/nvs_benchmark_colab.ipynb`
+4. Ou, na primeira célula, cole e execute:
 ```python
-!git clone https://github.com/SEU_REPOSITORIO TCC
-%cd TCC
+!git clone https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git TCC
+%cd /content/TCC
 !bash scripts/colab/setup_colab.sh
 ```
 
@@ -85,8 +86,8 @@ Todos os sistemas operacionais possuem os mesmos scripts com funcionalidade simi
 |--------|---------|---------|-------|-------|
 | Setup | Instala & valida dependências | ✅ | ✅ | ✅ |
 | Download Dataset | Baixa dados de benchmark | ✅ | ✅ | — |
-| Benchmark Quick | Teste com método único | ✅ | ✅ | ✅ |
-| Benchmark All | Compara todos os métodos | ✅ | ✅ | ✅ |
+| Benchmark Quick | Teste com método único | ✅ | ✅ | via notebook |
+| Benchmark All | Compara todos os métodos | ✅ | ✅ | manual |
 | Preview | View 3D interativo | ✅ | ✅ | — |
 | Generate Report | Relatório HTML & gráficos | ✅ | ✅ | ✅ |
 
