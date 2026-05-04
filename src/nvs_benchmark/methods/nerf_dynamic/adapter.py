@@ -254,9 +254,9 @@ class NeRFDynamicAdapter:
         vram_gb = hardware.get("vram_gb")
         high_vram = has_gpu and isinstance(vram_gb, (int, float)) and float(vram_gb) >= 8.0
 
-        n_samples = int(config.extra.get("nerf_n_samples", 96 if high_vram else 64))
+        n_samples = int(config.extra.get("nerf_n_samples", 128 if high_vram else 64))
         n_importance = int(config.extra.get("nerf_n_importance", 128))
-        n_rand = int(config.extra.get("nerf_n_rand", 1000 if high_vram else 500))
+        n_rand = int(config.extra.get("nerf_n_rand", 1024 if high_vram else 500))
         half_res = bool(config.extra.get("nerf_half_res", not high_vram))
 
         lines = [

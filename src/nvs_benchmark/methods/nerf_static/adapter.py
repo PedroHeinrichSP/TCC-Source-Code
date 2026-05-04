@@ -263,10 +263,10 @@ class NeRFStaticAdapter:
         high_vram = has_gpu and isinstance(vram_gb, (int, float)) and float(vram_gb) >= 8.0
 
         n_samples = int(config.extra.get("nerf_n_samples", 64 if high_vram else 32))
-        n_importance = int(config.extra.get("nerf_n_importance", 64 if high_vram else 0))
-        n_rand = int(config.extra.get("nerf_n_rand", 512 if high_vram else 128))
-        chunk = int(config.extra.get("nerf_chunk", 2048 if high_vram else 1024))
-        netchunk = int(config.extra.get("nerf_netchunk", 8192 if high_vram else 4096))
+        n_importance = int(config.extra.get("nerf_n_importance", 128 if high_vram else 0))
+        n_rand = int(config.extra.get("nerf_n_rand", 1024 if high_vram else 128))
+        chunk = int(config.extra.get("nerf_chunk", 4096 if high_vram else 1024))
+        netchunk = int(config.extra.get("nerf_netchunk", 16384 if high_vram else 4096))
         precrop_iters = int(config.extra.get("nerf_precrop_iters", 0))
         precrop_frac = float(config.extra.get("nerf_precrop_frac", 0.5))
         half_res = bool(config.extra.get("nerf_half_res", not high_vram))
