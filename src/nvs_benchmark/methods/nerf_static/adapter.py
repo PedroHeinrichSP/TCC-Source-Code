@@ -39,6 +39,12 @@ def _find_images(directory: Path) -> list[Path]:
     return sorted(files)
 
 
+def _get_hardware_info(config: RunConfig) -> dict:
+    """Retorna informacoes de hardware detectadas, se existirem."""
+    detected = config.extra.get("detected_hardware", {})
+    return detected if isinstance(detected, dict) else {}
+
+
 @dataclass
 class NeRFStaticAdapter:
     """Adaptador para NeRF estático usando D-NeRF (PyTorch) como engine.
@@ -251,15 +257,19 @@ class NeRFStaticAdapter:
 
         n_iter = iter_params.get("N_iter", 1000)
 
-        # Conservative defaults to fit low-VRAM GPUs (e.g., 2GB class).
-        n_samples = int(config.extra.get("nerf_n_samples", 32))
-        n_importance = int(config.extra.get("nerf_n_importance", 0))
-        n_rand = int(config.extra.get("nerf_n_rand", 128))
-        chunk = int(config.extra.get("nerf_chunk", 1024))
-        netchunk = int(config.extra.get("nerf_netchunk", 4096))
+        hardware = _get_hardware_info(config)
+        has_gpu = bool(hardware.get("has_gpu", False))
+        vram_gb = hardware.get("vram_gb")
+        high_vram = has_gpu and isinstance(vram_gb, (int, float)) and float(vram_gb) >= 8.0
+
+        n_samples = int(config.extra.get("nerf_n_samples", 64 if high_vram else 32))
+        n_importance = int(config.extra.get("nerf_n_importance", 64 if high_vram else 0))
+        n_rand = int(config.extra.get("nerf_n_rand", 512 if high_vram else 128))
+        chunk = int(config.extra.get("nerf_chunk", 2048 if high_vram else 1024))
+        netchunk = int(config.extra.get("nerf_netchunk", 8192 if high_vram else 4096))
         precrop_iters = int(config.extra.get("nerf_precrop_iters", 0))
         precrop_frac = float(config.extra.get("nerf_precrop_frac", 0.5))
-        half_res = bool(config.extra.get("nerf_half_res", True))
+        half_res = bool(config.extra.get("nerf_half_res", not high_vram))
 
         lines = [
             f"expname = {exp_name}",

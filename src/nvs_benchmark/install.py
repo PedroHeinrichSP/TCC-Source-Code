@@ -8,6 +8,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Tuple
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,35 @@ def _exec_cross_platform(command: str) -> subprocess.CompletedProcess:
         )
 
 
+def _ensure_git_submodules(path_value: str) -> Tuple[int, str]:
+    """Tenta inicializar/atualizar submódulos Git no diretório fornecido.
+
+    Retorna tupla (returncode, output). returncode 0 indica sucesso.
+    """
+    try:
+        repo_path = Path(path_value)
+        if not repo_path.exists():
+            return 1, f"path not found: {repo_path}"
+
+        gitmodules = repo_path / ".gitmodules"
+        if not gitmodules.exists():
+            return 0, "no .gitmodules present"
+
+        proc = subprocess.run(
+            ["git", "-C", str(repo_path), "submodule", "update", "--init", "--recursive"],
+            text=True,
+            capture_output=True,
+        )
+        out = ""
+        if proc.stdout:
+            out += proc.stdout
+        if proc.stderr:
+            out += "\n" + proc.stderr
+        return proc.returncode, out
+    except Exception as exc:
+        return 1, str(exc)
+
+
 def _install_dataset_wget_curl(dataset_name: str, url: str, target_path: str) -> int:
     """Baixa dataset usando wget ou curl (fallback para Linux/Colab).
     
@@ -182,10 +212,36 @@ def install_items(
                     proc = _exec_cross_platform(command)
                     if proc.returncode == 0:
                         messages.append(f"[ok] {item.label}: command executed")
+                        # After a successful clone/install, attempt to init/update git submodules if present
+                        try:
+                            sub_ret, sub_out = _ensure_git_submodules(item.path)
+                            if sub_ret == 0:
+                                if sub_out and "no .gitmodules" not in sub_out.lower():
+                                    messages.append(f"[ok] {item.label}: submodules initialized")
+                                else:
+                                    messages.append(f"[info] {item.label}: no git submodules to init")
+                            else:
+                                messages.append(f"[warn] {item.label}: submodule init failed (exit {sub_ret})")
+                                if sub_out:
+                                    messages.append(f"[debug] submodule output: {sub_out}")
+                        except Exception as exc:
+                            messages.append(f"[warn] {item.label}: submodule init raised: {exc}")
                     else:
                         messages.append(f"[error] {item.label}: command failed (exit {proc.returncode})")
                 except Exception as exc:
                     messages.append(f"[error] {item.label}: {exc}")
+                # If the command failed but the path exists, still try to init submodules
+                if Path(item.path).exists():
+                    try:
+                        sub_ret, sub_out = _ensure_git_submodules(item.path)
+                        if sub_ret == 0:
+                            messages.append(f"[ok] {item.label}: submodules initialized (post-failure)")
+                        else:
+                            messages.append(f"[warn] {item.label}: submodule init failed after failure (exit {sub_ret})")
+                            if sub_out:
+                                messages.append(f"[debug] submodule output: {sub_out}")
+                    except Exception as exc:
+                        messages.append(f"[warn] {item.label}: submodule init post-failure raised: {exc}")
 
     return messages
 
@@ -227,8 +283,34 @@ def install_item_by_id(
                 proc = _exec_cross_platform(command)
                 if proc.returncode == 0:
                     messages.append(f"[ok] {item.label}: command executed")
+                    # After successful install, try to initialize git submodules if any
+                    try:
+                        sub_ret, sub_out = _ensure_git_submodules(item.path)
+                        if sub_ret == 0:
+                            if sub_out and "no .gitmodules" not in sub_out.lower():
+                                messages.append(f"[ok] {item.label}: submodules initialized")
+                            else:
+                                messages.append(f"[info] {item.label}: no git submodules to init")
+                        else:
+                            messages.append(f"[warn] {item.label}: submodule init failed (exit {sub_ret})")
+                            if sub_out:
+                                messages.append(f"[debug] submodule output: {sub_out}")
+                    except Exception as exc:
+                        messages.append(f"[warn] {item.label}: submodule init raised: {exc}")
                 else:
                     messages.append(f"[error] {item.label}: command failed (exit {proc.returncode})")
             except Exception as exc:
                 messages.append(f"[error] {item.label}: {exc}")
+            # If the command failed but produced the target path, still try submodule init
+        if Path(item.path).exists():
+            try:
+                sub_ret, sub_out = _ensure_git_submodules(item.path)
+                if sub_ret == 0:
+                    messages.append(f"[ok] {item.label}: submodules initialized (post-failure)")
+                else:
+                    messages.append(f"[warn] {item.label}: submodule init failed after failure (exit {sub_ret})")
+                    if sub_out:
+                        messages.append(f"[debug] submodule output: {sub_out}")
+            except Exception as exc:
+                messages.append(f"[warn] {item.label}: submodule init post-failure raised: {exc}")
     return messages

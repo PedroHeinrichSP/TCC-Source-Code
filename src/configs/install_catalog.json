@@ -31,7 +31,7 @@
       "label": "3D Gaussian Splatting",
       "path": "./third_party/gaussian_splatting",
       "url": "https://github.com/graphdeco-inria/gaussian-splatting",
-      "command": "git clone https://github.com/graphdeco-inria/gaussian-splatting ./third_party/gaussian_splatting",
+      "command": "git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting ./third_party/gaussian_splatting",
       "size_mb": null
     },
     {

@@ -37,6 +37,12 @@ def _find_images(directory: Path) -> list[Path]:
     return sorted(files)
 
 
+def _get_hardware_info(config: RunConfig) -> dict:
+    """Retorna informacoes de hardware detectadas, se existirem."""
+    detected = config.extra.get("detected_hardware", {})
+    return detected if isinstance(detected, dict) else {}
+
+
 @dataclass
 class NeRFDynamicAdapter:
     """Adaptador para D-NeRF dinâmico (albertpumarola/D-NeRF).
@@ -243,6 +249,15 @@ class NeRFDynamicAdapter:
         exp_name = f"{config.run_id}_{self.method_id}"
 
         n_iter = iter_params.get("N_iter", 1000)
+        hardware = _get_hardware_info(config)
+        has_gpu = bool(hardware.get("has_gpu", False))
+        vram_gb = hardware.get("vram_gb")
+        high_vram = has_gpu and isinstance(vram_gb, (int, float)) and float(vram_gb) >= 8.0
+
+        n_samples = int(config.extra.get("nerf_n_samples", 96 if high_vram else 64))
+        n_importance = int(config.extra.get("nerf_n_importance", 128))
+        n_rand = int(config.extra.get("nerf_n_rand", 1000 if high_vram else 500))
+        half_res = bool(config.extra.get("nerf_half_res", not high_vram))
 
         lines = [
             f"expname = {exp_name}",
@@ -258,16 +273,16 @@ class NeRFDynamicAdapter:
             f"lrate_decay = {max(250, n_iter // 2)}",
             "",
             f"N_iter = {n_iter}",
-            "N_samples = 64",
-            "N_importance = 128",
-            "N_rand = 500",
+            f"N_samples = {n_samples}",
+            f"N_importance = {n_importance}",
+            f"N_rand = {n_rand}",
             "testskip = 1",
             "",
             "precrop_iters = 500",
             f"precrop_iters_time = {min(n_iter // 50, 10000)}",
             "precrop_frac = 0.5",
             "",
-            "half_res = True",
+            f"half_res = {str(half_res)}",
             "do_half_precision = False",
             "",
             f"i_print = {iter_params.get('i_print', 500)}",
