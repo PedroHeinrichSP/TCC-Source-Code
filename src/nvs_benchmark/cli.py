@@ -12,7 +12,7 @@ from nvs_benchmark.core import Orchestrator
 from nvs_benchmark.core import InferenceRequest, TrainRequest
 from nvs_benchmark.core.presets import PRESET_NAMES, list_preset_summaries
 from nvs_benchmark.data import SUPPORTED_DATASETS, load_dataset, validate_dataset
-from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot
+from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot, evaluate_benchmark_metrics
 from nvs_benchmark.methods import ExternalMethodAdapter, build_registry_with_all_methods
 from nvs_benchmark.reporting import generate_comparison_reports
 from nvs_benchmark.runtime import RunLogger, audit_docstrings, save_doc_audit_report
@@ -61,6 +61,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Arquivo JSON de snapshot",
     )
     metrics_parser.add_argument("--log-dir", default="./logs", help="Diretório de logs estruturados")
+
+    metrics_compute_parser = subparsers.add_parser(
+        "metrics-compute",
+        help="Recomputar métricas a partir de checkpoint e imagens renderizadas pré-existentes",
+    )
+    metrics_compute_parser.add_argument("--method", required=True, help="Identificador do método (ex: nerf_static)")
+    metrics_compute_parser.add_argument("--checkpoint", required=True, help="Caminho para checkpoint treinado")
+    metrics_compute_parser.add_argument("--rendered-dir", required=True, help="Diretório com imagens renderizadas (PNG)")
+    metrics_compute_parser.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS, help="Nome do dataset")
+    metrics_compute_parser.add_argument("--root", required=True, help="Diretório raiz do dataset")
+    metrics_compute_parser.add_argument("--reference-dir", default=None, help="Diretório de imagens de referência (override)")
+    metrics_compute_parser.add_argument("--split", default="train", help="Split do dataset")
+    metrics_compute_parser.add_argument(
+        "--snapshot-file",
+        required=True,
+        help="Arquivo JSON para salvar métricas",
+    )
+    metrics_compute_parser.add_argument(
+        "--append-snapshot",
+        action="store_true",
+        help="Anexar/atualizar método no snapshot existente",
+    )
+    metrics_compute_parser.add_argument(
+        "--train-seconds",
+        type=float,
+        default=0.0,
+        help="Tempo de treinamento em segundos (para referência)",
+    )
+    metrics_compute_parser.add_argument(
+        "--inference-seconds",
+        type=float,
+        default=0.0,
+        help="Tempo de inferência em segundos (para referência)",
+    )
+    metrics_compute_parser.add_argument("--log-dir", default="./logs", help="Diretório de logs estruturados")
+    metrics_compute_parser.add_argument(
+        "--strict-results",
+        action="store_true",
+        help="Falha se metricas invalidas forem detectadas",
+    )
+    metrics_compute_parser.add_argument(
+        "--min-required-pairs",
+        type=int,
+        default=1,
+        help="Numero minimo de pares validos exigidos",
+    )
 
     report_parser = subparsers.add_parser(
         "report-generate",
@@ -748,6 +794,138 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
         logger.finish("failed", {"error": str(exc)})
         print(f"Falha em metrics-check: {exc}")
         print(f"Logs da execucao: {logger.run_dir}")
+        return 1
+
+
+def run_metrics_compute(
+    *,
+    method: str,
+    checkpoint: str,
+    rendered_dir: str,
+    dataset: str,
+    root: str,
+    reference_dir: str | None,
+    split: str,
+    snapshot_file: str,
+    append_snapshot: bool,
+    train_seconds: float,
+    inference_seconds: float,
+    log_dir: str,
+    strict_results: bool,
+    min_required_pairs: int,
+) -> int:
+    """Recomputa métricas a partir de checkpoint e imagens renderizadas pré-existentes."""
+    logger = RunLogger(
+        command="metrics-compute",
+        parameters={
+            "method": method,
+            "checkpoint": checkpoint,
+            "rendered_dir": rendered_dir,
+            "dataset": dataset,
+            "root": root,
+            "reference_dir": reference_dir,
+            "split": split,
+            "snapshot_file": snapshot_file,
+            "append_snapshot": append_snapshot,
+            "train_seconds": train_seconds,
+            "inference_seconds": inference_seconds,
+            "strict_results": strict_results,
+            "min_required_pairs": min_required_pairs,
+        },
+        log_dir=log_dir,
+    )
+    try:
+        # Validar arquivos de entrada
+        checkpoint_path = Path(checkpoint)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint não encontrado: {checkpoint}")
+
+        rendered_path = Path(rendered_dir)
+        if not rendered_path.exists() or not rendered_path.is_dir():
+            raise FileNotFoundError(f"Diretório de renders não encontrado: {rendered_dir}")
+
+        # Contar frames PNG
+        frames = len(list(rendered_path.glob("*.png")))
+        if frames == 0:
+            raise ValueError(f"Nenhum arquivo PNG encontrado em: {rendered_dir}")
+
+        print(f"[{method}] Carregado:")
+        print(f"  Checkpoint: {checkpoint}")
+        print(f"  Renders: {rendered_dir} ({frames} frames)")
+        print(f"  Train time: {train_seconds:.1f}s | Inference time: {inference_seconds:.1f}s")
+
+        # Resolver referências
+        if reference_dir:
+            ref_path = Path(reference_dir)
+        else:
+            # Tentar carregar do dataset
+            dataset_spec = load_dataset(dataset_name=dataset, root=root, split=split)
+            # Usar diretório de renders do dataset como referência
+            ref_path = Path(root) / "renders" if (Path(root) / "renders").exists() else rendered_path
+
+        if not ref_path.exists():
+            raise FileNotFoundError(f"Diretório de referência não encontrado: {ref_path}")
+
+        # Computar métricas
+        print(f"\nComputando métricas...")
+        metric = evaluate_benchmark_metrics(
+            method=method,
+            pred_dir=rendered_path,
+            ref_dir=ref_path,
+            frames=frames,
+            train_seconds=train_seconds,
+            inference_seconds=inference_seconds,
+        )
+
+        # Validação de métricas
+        if strict_results:
+            validation_error = _validate_real_metrics(metric, min_required_pairs=min_required_pairs)
+            if validation_error:
+                raise RuntimeError(f"Falha na validação de métricas: {validation_error}")
+
+        # Salvar snapshot
+        _save_method_metric_snapshot(
+            metric=metric,
+            snapshot_file=snapshot_file,
+            append=append_snapshot,
+        )
+
+        if strict_results:
+            snapshot_validation = validate_snapshot_file(snapshot_file, must_exist=True)
+            if not snapshot_validation.is_valid:
+                raise RuntimeError(f"Falha ao validar snapshot: {snapshot_validation.message}")
+
+        logger.event(
+            "metrics_computed",
+            {
+                "method": method,
+                "psnr": metric.psnr,
+                "ssim": metric.ssim,
+                "lpips": metric.lpips,
+                "fps": metric.fps,
+                "vram_gb": metric.vram_gb,
+                "frame_time_ms": metric.frame_time_ms,
+                "latency_p50_ms": metric.latency_p50_ms,
+                "latency_p90_ms": metric.latency_p90_ms,
+                "latency_p99_ms": metric.latency_p99_ms,
+                "snapshot_file": snapshot_file,
+            },
+        )
+
+        print(
+            f"[{method}] PSNR={metric.psnr:.2f} SSIM={metric.ssim:.3f} "
+            f"LPIPS={metric.lpips:.3f} FPS={metric.fps:.2f} VRAM={metric.vram_gb:.2f}"
+        )
+        print(f"✓ Snapshot salvo em: {snapshot_file}")
+
+        logger.finish("success")
+        print("Métricas computadas com sucesso.")
+        print(f"Logs da execução: {logger.run_dir}")
+        return 0
+    except Exception as exc:
+        logger.finish("failed", {"error": str(exc)})
+        print(f"Falha em metrics-compute: {exc}")
+        print(f"Logs da execução: {logger.run_dir}")
         return 1
 
 
@@ -1450,6 +1628,23 @@ def main() -> int:
             output_dir=args.output_dir,
             snapshot_file=args.snapshot_file,
             log_dir=args.log_dir,
+        )
+    if args.command == "metrics-compute":
+        return run_metrics_compute(
+            method=args.method,
+            checkpoint=args.checkpoint,
+            rendered_dir=args.rendered_dir,
+            dataset=args.dataset,
+            root=args.root,
+            reference_dir=args.reference_dir,
+            split=args.split,
+            snapshot_file=args.snapshot_file,
+            append_snapshot=args.append_snapshot,
+            train_seconds=args.train_seconds,
+            inference_seconds=args.inference_seconds,
+            log_dir=args.log_dir,
+            strict_results=args.strict_results,
+            min_required_pairs=args.min_required_pairs,
         )
     if args.command == "install":
         return run_install(

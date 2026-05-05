@@ -12,6 +12,7 @@ from typing import Any
 from nvs_benchmark.evaluation import BenchmarkMetrics, evaluate_benchmark_metrics, save_metrics_snapshot, write_reference_image
 from nvs_benchmark.reporting import generate_comparison_reports
 from nvs_benchmark.data.fingerprint import build_dataset_fingerprint
+from nvs_benchmark.methods.utils import export_reference_frames_from_dataset
 
 from .cache_registry import CacheEntry, CacheRegistry
 from .contracts import InferenceRequest, InferenceResult, ReportFormat, RunArtifacts, RunConfig, TrainRequest
@@ -90,9 +91,9 @@ class Orchestrator:
         """
         method = self.registry.get(config.method)
         method.validate_config(config)
-        cache_enabled = config.extra.get("cache_enabled", True)
-        reuse_renders = config.extra.get("reuse_renders", True)
-        reuse_metrics = config.extra.get("reuse_metrics", True)
+        cache_enabled = bool(config.extra.get("cache_enabled", True))
+        reuse_renders = bool(config.extra.get("reuse_renders", False))
+        reuse_metrics = bool(config.extra.get("reuse_metrics", False))
         cache_max_size_gb = float(config.extra.get("cache_max_size_gb", 50.0))
 
         cache_registry = CacheRegistry(output_dir=config.output_dir)
@@ -200,7 +201,13 @@ class Orchestrator:
                 ref_dir = Path(reference_dir)
             else:
                 ref_dir = Path(config.output_dir) / config.run_id / config.method / "references"
-                write_reference_image(ref_dir)
+                copied = export_reference_frames_from_dataset(
+                    root=config.dataset.root,
+                    split=config.dataset.split,
+                    reference_dir=ref_dir,
+                )
+                if copied == 0:
+                    write_reference_image(ref_dir)
 
             metrics_cache_key = hashlib.sha256(
                 (
