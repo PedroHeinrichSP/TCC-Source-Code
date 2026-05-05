@@ -68,3 +68,6 @@ logs/
 
 .agents/
 .github/instructions/
+
+.venv-wsl/
+.vscode
