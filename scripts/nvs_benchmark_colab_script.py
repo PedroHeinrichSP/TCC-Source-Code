@@ -234,6 +234,14 @@ def install_cuda_submodule(label: str, package_path: Path, *, required: bool = T
         print(f"[{level}] {label}: diretorio nao encontrado em {package_path}")
         return not required
 
+    if label == "simple-knn":
+        package_dir = package_path / "simple_knn"
+        package_dir.mkdir(parents=True, exist_ok=True)
+        init_file = package_dir / "__init__.py"
+        if not init_file.exists():
+            init_file.write_text("", encoding="utf-8")
+            print(f"[info] {label}: criado arquivo de pacote em {init_file}")
+
     install_cmd = [
         sys.executable,
         "-m",
