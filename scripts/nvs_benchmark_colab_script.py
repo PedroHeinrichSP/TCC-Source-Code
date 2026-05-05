@@ -192,13 +192,14 @@ status = run_logged([sys.executable, "-m", "nvs_benchmark.cli", "status"], label
 if status.returncode != 0:
     raise RuntimeError("Falha ao executar nvs_benchmark.cli status. Ative INSTALL_PROJECT=True ou selecione o kernel/venv correto.")
 
+third_party_dir = Path("./third_party")
+third_party_dir.mkdir(parents=True, exist_ok=True)
+methods_to_clone = [
+    {"id": "d_nerf", "path": third_party_dir / "d_nerf", "url": "https://github.com/albertpumarola/D-NeRF.git"},
+    {"id": "gaussian_splatting", "path": third_party_dir / "gaussian_splatting", "url": "https://github.com/graphdeco-inria/gaussian-splatting.git"},
+]
+
 if CLONE_THIRD_PARTY_IF_MISSING:
-    third_party_dir = Path("./third_party")
-    third_party_dir.mkdir(parents=True, exist_ok=True)
-    methods_to_clone = [
-        {"id": "d_nerf", "path": third_party_dir / "d_nerf", "url": "https://github.com/albertpumarola/D-NeRF.git"},
-        {"id": "gaussian_splatting", "path": third_party_dir / "gaussian_splatting", "url": "https://github.com/graphdeco-inria/gaussian-splatting.git"},
-    ]
     for method in methods_to_clone:
         if method["path"].exists() and any(method["path"].iterdir()):
             print(f"OK: {method['id']} ja existe em {method['path']}")
@@ -209,6 +210,111 @@ else:
     print("Pulando clone de third_party (CLONE_THIRD_PARTY_IF_MISSING=False)")
 
 print("\nAmbiente pronto para as proximas celulas.")
+
+# ---- cell ----
+# Dependencias compiladas para Gaussian Splatting no Colab
+print("=" * 70)
+print("Instalando dependencias compiladas dos metodos")
+print("=" * 70)
+
+compiled_method_status: dict[str, bool] = {}
+
+
+def print_tail(text: str, *, lines: int = 40, prefix: str = "") -> None:
+    if not text:
+        return
+    for line in text.splitlines()[-lines:]:
+        if line.strip():
+            print(f"{prefix}{line}" if prefix else line)
+
+
+def install_cuda_submodule(label: str, package_path: Path, *, required: bool = True) -> bool:
+    if not package_path.exists():
+        level = "warn" if required else "info"
+        print(f"[{level}] {label}: diretorio nao encontrado em {package_path}")
+        return not required
+
+    install_cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--no-build-isolation",
+        "-e",
+        str(package_path),
+    ]
+    print(f"\nInstalando {label} em: {package_path}")
+    print(f"$ {' '.join(install_cmd)}")
+    result = subprocess.run(install_cmd, text=True, capture_output=True)
+    print_tail(result.stdout, lines=40)
+    if result.returncode == 0:
+        print(f"OK: {label} instalado com sucesso")
+        return True
+
+    print(f"AVISO: falha ao instalar {label} (code={result.returncode})")
+    print_tail(result.stderr, lines=30, prefix="  ")
+    return False
+
+
+gs_path = Path("./third_party/gaussian_splatting")
+if gs_path.exists():
+    print(f"\nGaussian Splatting encontrado em: {gs_path}")
+    try:
+        submod = subprocess.run(["git", "-C", str(gs_path), "submodule", "status"], text=True, capture_output=True)
+        if submod.stdout:
+            print("[git submodule status]\n" + submod.stdout)
+    except Exception:
+        pass
+
+    if (gs_path / "train.py").exists() and (gs_path / "render.py").exists():
+        print("[info] Repositorio base do Gaussian Splatting presente. Ele nao e um pacote pip instalavel.")
+        compiled_method_status["gaussian_splatting_repo"] = True
+    else:
+        print("[warn] Repositorio Gaussian Splatting incompleto. train.py/render.py nao encontrados.")
+        compiled_method_status["gaussian_splatting_repo"] = False
+
+    required_submodules = [
+        ("diff-gaussian-rasterization", gs_path / "submodules" / "diff-gaussian-rasterization"),
+        ("simple-knn", gs_path / "submodules" / "simple-knn"),
+    ]
+    optional_submodules = [
+        ("fused-ssim", gs_path / "submodules" / "fused-ssim"),
+    ]
+
+    required_ok = True
+    for label, package_path in required_submodules:
+        required_ok = install_cuda_submodule(label, package_path, required=True) and required_ok
+
+    for label, package_path in optional_submodules:
+        install_cuda_submodule(label, package_path, required=False)
+
+    probe_cmd = [
+        sys.executable,
+        "-c",
+        "import diff_gaussian_rasterization, simple_knn._C; print('ok')",
+    ]
+    probe = subprocess.run(probe_cmd, text=True, capture_output=True, cwd=str(gs_path))
+    probe_ok = probe.returncode == 0 and "ok" in probe.stdout
+    if not probe_ok:
+        print("[warn] Probe final das extensoes do gs_static falhou.")
+        print_tail(probe.stderr, lines=20, prefix="  ")
+    compiled_method_status["gs_static_extensions"] = required_ok and probe_ok
+else:
+    print("[info] Repositorio gaussian_splatting ausente; pulando compilacao de extensoes.")
+    compiled_method_status["gaussian_splatting_repo"] = False
+    compiled_method_status["gs_static_extensions"] = False
+
+print("\n" + "=" * 70)
+print(f"Repositorios prontos: {', '.join([m['id'] for m in methods_to_clone if Path(m['path']).exists()]) or '[nenhum]'}")
+print(
+    "Extensoes do gs_static: "
+    + ("prontas" if compiled_method_status.get("gs_static_extensions") else "pendentes")
+)
+print("=" * 70)
+if compiled_method_status.get("gs_static_extensions"):
+    print("\nOK: ambiente pronto.")
+else:
+    print("\nAVISO: ambiente base pronto, mas gs_static ainda nao esta compilado corretamente.")
 
 # ---- cell ----
 # Verificacao de hardware
