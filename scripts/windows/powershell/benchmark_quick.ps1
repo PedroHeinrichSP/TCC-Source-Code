@@ -129,6 +129,6 @@ Write-Host "  - Metrics:  ./artifacts/metrics/latest.json" -ForegroundColor Cyan
 Write-Host "  - Logs:     ./logs/runs/" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  - View results:       .\scripts\windows\powershell\preview.ps1" -ForegroundColor Cyan
+Write-Host "  - View results:       .\scripts\windows\powershell\generate_report.ps1" -ForegroundColor Cyan
 Write-Host "  - Generate report:    .\scripts\windows\powershell\generate_report.ps1" -ForegroundColor Cyan
 Write-Host ""

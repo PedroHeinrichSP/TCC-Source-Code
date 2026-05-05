@@ -24,6 +24,18 @@ from nvs_benchmark.core import (
 from nvs_benchmark.core.presets import resolve_iterations
 
 
+class GSStaticRuntimeError(RuntimeError):
+    """Erro base de ambiente para a integracao do 3D Gaussian Splatting."""
+
+
+class GSStaticHardwareError(GSStaticRuntimeError):
+    """Indica host incompatível com a execucao real do 3DGS."""
+
+
+class GSStaticDependencyError(GSStaticRuntimeError):
+    """Indica dependencias do runtime 3DGS ausentes ou incompletas."""
+
+
 @dataclass
 class GSStaticAdapter:
     """Adaptador para integração de 3D Gaussian Splatting estático.
@@ -60,6 +72,26 @@ class GSStaticAdapter:
             raise ValueError(
                 "Repositorio 3DGS nao encontrado ou incompleto. "
                 f"Esperado em: {repo_path} (com train.py e render.py)."
+            )
+        runtime = self._probe_runtime(config)
+        torch_error = runtime.get("torch_error")
+        if torch_error:
+            raise GSStaticDependencyError(
+                "Runtime do gs_static nao possui torch disponivel no interpretador configurado. "
+                f"Detalhe: {torch_error}"
+            )
+        if not bool(runtime.get("cuda_available")):
+            raise GSStaticHardwareError(
+                "gs_static requer CUDA para execucao real. "
+                f"Interpretador: {runtime.get('python_executable', self._resolve_python(config))}"
+            )
+        module_errors = runtime.get("module_errors", {})
+        missing_modules = [name for name, error in module_errors.items() if error]
+        if missing_modules:
+            details = "; ".join(f"{name}: {module_errors[name]}" for name in missing_modules)
+            raise GSStaticDependencyError(
+                "Dependencias nativas do Gaussian Splatting nao estao disponiveis. "
+                f"Modulos com erro: {details}"
             )
 
     def train(self, request: TrainRequest) -> TrainResult:
@@ -171,6 +203,60 @@ class GSStaticAdapter:
         configured = config.extra.get("python_executable", self.python_executable)
         resolved = str(configured).strip() if configured is not None else ""
         return resolved or sys.executable
+
+    def _probe_runtime(self, config: RunConfig) -> dict[str, object]:
+        python_executable = self._resolve_python(config)
+        repo_path = self._resolve_repo_path(config)
+        probe_script = """
+import importlib
+import json
+import sys
+
+result = {
+    "python_executable": sys.executable,
+    "cuda_available": False,
+    "module_errors": {},
+}
+
+try:
+    import torch
+except Exception as exc:
+    result["torch_error"] = f"{type(exc).__name__}: {exc}"
+else:
+    result["torch_version"] = getattr(torch, "__version__", "unknown")
+    result["cuda_available"] = bool(torch.cuda.is_available())
+    for module_name in ("diff_gaussian_rasterization", "simple_knn._C"):
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            result["module_errors"][module_name] = f"{type(exc).__name__}: {exc}"
+        else:
+            result["module_errors"][module_name] = None
+
+print(json.dumps(result))
+""".strip()
+        completed = subprocess.run(
+            [python_executable, "-c", probe_script],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            stderr = completed.stderr[-4000:] if completed.stderr else ""
+            raise GSStaticDependencyError(
+                "Nao foi possivel inspecionar o runtime do Gaussian Splatting. "
+                f"Interpretador: {python_executable}. STDERR: {stderr}"
+            )
+        stdout = completed.stdout.strip()
+        if not stdout:
+            raise GSStaticDependencyError("Probe do runtime do Gaussian Splatting nao retornou dados.")
+        try:
+            return json.loads(stdout.splitlines()[-1])
+        except json.JSONDecodeError as exc:
+            raise GSStaticDependencyError(
+                "Probe do runtime do Gaussian Splatting retornou saida invalida."
+            ) from exc
 
     def _normalize_command(self, value: object | None) -> list[str] | None:
         if value is None:

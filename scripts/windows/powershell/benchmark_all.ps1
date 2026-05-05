@@ -76,6 +76,6 @@ Write-Host ""
 Write-Host "Results: $SnapshotFile" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  - View results:       .\scripts\windows\powershell\preview.ps1" -ForegroundColor Cyan
+Write-Host "  - View results:       .\scripts\windows\powershell\generate_report.ps1" -ForegroundColor Cyan
 Write-Host "  - Generate report:    .\scripts\windows\powershell\generate_report.ps1 -ReportName $ReportName" -ForegroundColor Cyan
 Write-Host ""

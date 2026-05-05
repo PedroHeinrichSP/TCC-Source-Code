@@ -14,9 +14,9 @@ from nvs_benchmark.core.presets import PRESET_NAMES, list_preset_summaries
 from nvs_benchmark.data import SUPPORTED_DATASETS, load_dataset, validate_dataset
 from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot, evaluate_benchmark_metrics
 from nvs_benchmark.methods import ExternalMethodAdapter, build_registry_with_all_methods
+from nvs_benchmark.methods.gs_static.adapter import GSStaticHardwareError
 from nvs_benchmark.reporting import generate_comparison_reports
 from nvs_benchmark.runtime import RunLogger, audit_docstrings, save_doc_audit_report
-from nvs_benchmark.ui import run_preview_ui, run_dashboard_ui
 from nvs_benchmark.install import load_install_catalog, install_items
 from nvs_benchmark.cli_extensions import (
     validate_dataset_path,
@@ -31,6 +31,24 @@ from nvs_benchmark.cli_extensions import (
     format_time_estimate,
     get_disk_usage,
 )
+
+
+def _resolve_smoke_dataset_spec() -> DatasetSpec:
+    """Resolve dataset de smoke com fallback para fixture local conhecida."""
+    candidates = [
+        Path("./data/_smoke/blender"),
+        Path("./data/blender_synthetic/nerf_synthetic/lego"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return DatasetSpec(name="blender_synthetic", root=str(candidate))
+    expected = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(f"Nenhum dataset de smoke encontrado. Caminhos verificados: {expected}")
+
+
+def _is_hardware_skip(method_id: str, exc: Exception) -> bool:
+    """Retorna True quando a falha deve virar skip por hardware incompatível."""
+    return method_id == "gs_static" and isinstance(exc, GSStaticHardwareError)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -190,38 +208,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-unit-tests",
         action="store_true",
         help="Executar testes unitários ao final da suíte",
-    )
-
-    ui_parser = subparsers.add_parser("ui-preview", help="Abrir a UI de preview em Viser")
-    ui_parser.add_argument("--host", default="127.0.0.1", help="Host")
-    ui_parser.add_argument("--port", type=int, default=8765, help="Porta")
-    ui_parser.add_argument("--no-browser", action="store_true", help="Não abrir navegador")
-    ui_parser.add_argument(
-        "--metrics-file",
-        default="./artifacts/metrics/latest_preview.json",
-        help="Arquivo JSON de métricas",
-    )
-    ui_parser.add_argument(
-        "--scene-transforms-file",
-        default="./data/blender_synthetic/transforms_train.json",
-        help="Arquivo de transforms para frustums da cena",
-    )
-    ui_parser.add_argument(
-        "--install-catalog-file",
-        default="./configs/install_catalog.json",
-        help="Catalogo JSON de downloads para datasets e modelos",
-    )
-    ui_parser.add_argument(
-        "--dashboard-port",
-        type=int,
-        default=8780,
-        help="Porta do dashboard web",
-    )
-    ui_parser.add_argument(
-        "--viser-port",
-        type=int,
-        default=8765,
-        help="Porta do Viser (iframe)",
     )
 
     install_parser = subparsers.add_parser("install", help="Instalar datasets/modelos via catalogo")
@@ -459,7 +445,7 @@ def run_create_adapter(name: str, output_dir: str, kind: str) -> int:
         \"\"\"Implementacao do adaptador {display_name}.
 
         Seguir os passos marcados com TODO para completar a integracao.
-        Consulte a documentacao em docs/ para orientacoes detalhadas.
+        Consulte os adapters existentes e a documentacao principal do projeto para orientacoes.
         \"\"\"
 
         from __future__ import annotations
@@ -686,7 +672,9 @@ def run_methods_check(output_dir: str, log_dir: str) -> int:
         print(f"Metodos registrados: {method_ids}")
         logger.event("run_started", {"method_ids": method_ids})
 
-        sample_dataset = DatasetSpec(name="blender_synthetic", root="./data/_smoke/blender")
+        sample_dataset = _resolve_smoke_dataset_spec()
+        completed_methods: list[str] = []
+        skipped_methods: list[str] = []
         for method_id in method_ids:
             config = RunConfig(
                 run_id=f"smoke-{method_id}",
@@ -697,12 +685,19 @@ def run_methods_check(output_dir: str, log_dir: str) -> int:
                 hardware_profile=HardwareProfile.ADAPTIVE,
             )
             method = registry.get(method_id)
-            method.validate_config(config)
-
-            train_result = method.train(TrainRequest(config=config))
-            infer_result = method.infer(
-                InferenceRequest(config=config, checkpoint_path=train_result.checkpoint_path, split="test")
-            )
+            try:
+                method.validate_config(config)
+                train_result = method.train(TrainRequest(config=config))
+                infer_result = method.infer(
+                    InferenceRequest(config=config, checkpoint_path=train_result.checkpoint_path, split="test")
+                )
+            except Exception as exc:
+                if _is_hardware_skip(method_id, exc):
+                    skipped_methods.append(method_id)
+                    logger.event("method_skipped", {"method": method_id, "reason": str(exc)})
+                    print(f"[{method_id}] skipped: {exc}")
+                    continue
+                raise
 
             logger.event(
                 "method_completed",
@@ -714,11 +709,22 @@ def run_methods_check(output_dir: str, log_dir: str) -> int:
                     "inference_seconds": infer_result.inference_seconds,
                 },
             )
+            completed_methods.append(method_id)
             print(f"[{method_id}] checkpoint: {train_result.checkpoint_path}")
             print(f"[{method_id}] renders: {infer_result.rendered_dir}")
 
-        logger.finish("success", {"methods_count": len(method_ids)})
-        print("Integracao dos metodos validada com sucesso.")
+        logger.finish(
+            "success",
+            {
+                "methods_count": len(completed_methods),
+                "skipped_methods": skipped_methods,
+                "dataset_root": sample_dataset.root,
+            },
+        )
+        print(f"Dataset de smoke: {sample_dataset.root}")
+        print(f"Metodos validados com sucesso: {completed_methods}")
+        if skipped_methods:
+            print(f"Metodos pulados por hardware: {skipped_methods}")
         print(f"Logs da execucao: {logger.run_dir}")
         return 0
     except Exception as exc:
@@ -743,8 +749,9 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
         registry = build_registry_with_all_methods()
         orchestrator = Orchestrator(registry=registry)
         method_ids = registry.list_ids()
-        sample_dataset = DatasetSpec(name="blender_synthetic", root="./data/_smoke/blender")
+        sample_dataset = _resolve_smoke_dataset_spec()
         metrics = []
+        skipped_methods: list[str] = []
         logger.event("run_started", {"method_ids": method_ids})
 
         for method_id in method_ids:
@@ -760,7 +767,15 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
                 extra={"skip_snapshot": True, "skip_reports": True},
             )
 
-            result = orchestrator.run(config)
+            try:
+                result = orchestrator.run(config)
+            except Exception as exc:
+                if _is_hardware_skip(method_id, exc):
+                    skipped_methods.append(method_id)
+                    logger.event("method_skipped", {"method": method_id, "reason": str(exc)})
+                    print(f"[{method_id}] skipped: {exc}")
+                    continue
+                raise
             if result.metrics is None:
                 raise RuntimeError(f"Metricas nao foram calculadas para {method_id}.")
             metric = result.metrics
@@ -786,7 +801,18 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
             )
 
         save_metrics_snapshot(metrics, snapshot_file)
-        logger.finish("success", {"snapshot_file": snapshot_file, "methods_count": len(metrics)})
+        logger.finish(
+            "success",
+            {
+                "snapshot_file": snapshot_file,
+                "methods_count": len(metrics),
+                "skipped_methods": skipped_methods,
+                "dataset_root": sample_dataset.root,
+            },
+        )
+        print(f"Dataset de smoke: {sample_dataset.root}")
+        if skipped_methods:
+            print(f"Metodos pulados por hardware: {skipped_methods}")
         print(f"Snapshot salvo em: {snapshot_file}")
         print(f"Logs da execucao: {logger.run_dir}")
         return 0
@@ -1219,24 +1245,6 @@ def _save_method_metric_snapshot(metric: BenchmarkMetrics, snapshot_file: str, a
     save_metrics_snapshot(list(merged.values()), snapshot_file)
 
 
-def run_ui_preview(host: str, port: int, no_browser: bool, metrics_file: str, scene_transforms_file: str, install_catalog_file: str, dashboard_port: int, viser_port: int) -> int:
-    """Inicia UI Viser para métricas e pré-visualização 3D da cena."""
-    effective_dashboard_port = dashboard_port
-    if port != 8765 and dashboard_port == 8780:
-        effective_dashboard_port = port
-
-    run_dashboard_ui(
-        host=host,
-        dashboard_port=effective_dashboard_port,
-        viser_port=viser_port,
-        open_browser=not no_browser,
-        metrics_file=metrics_file,
-        scene_transforms_file=scene_transforms_file,
-        install_catalog_file=install_catalog_file,
-    )
-    return 0
-
-
 def run_report_generate(
     snapshot_file: str,
     output_dir: str,
@@ -1353,7 +1361,11 @@ def run_standard_test(
             ("contracts", lambda: run_contracts_check()),
             (
                 "dataset-check",
-                lambda: run_dataset_check(dataset="blender_synthetic", root="./data/_smoke/blender", split="train"),
+                lambda: run_dataset_check(
+                    dataset="blender_synthetic",
+                    root=_resolve_smoke_dataset_spec().root,
+                    split="train",
+                ),
             ),
             ("methods-check", lambda: run_methods_check(output_dir=output_dir, log_dir=log_dir)),
             (
@@ -1651,17 +1663,6 @@ def main() -> int:
             catalog_file=args.catalog_file,
             only=args.only,
             execute=args.execute,
-        )
-    if args.command == "ui-preview":
-        return run_ui_preview(
-            host=args.host,
-            port=args.port,
-            no_browser=args.no_browser,
-            metrics_file=args.metrics_file,
-            scene_transforms_file=args.scene_transforms_file,
-            install_catalog_file=args.install_catalog_file,
-            dashboard_port=args.dashboard_port,
-            viser_port=args.viser_port,
         )
     if args.command == "report-generate":
         return run_report_generate(

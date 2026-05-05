@@ -124,6 +124,6 @@ Write-Host "====================================================" -ForegroundCol
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Run a quick benchmark:    .\scripts\windows\powershell\benchmark_quick.ps1" -ForegroundColor Cyan
-Write-Host "  2. View 3D results:          .\scripts\windows\powershell\preview.ps1" -ForegroundColor Cyan
+Write-Host "  2. Generate report:          .\scripts\windows\powershell\generate_report.ps1" -ForegroundColor Cyan
 Write-Host "  3. Generate HTML report:     .\scripts\windows\powershell\generate_report.ps1" -ForegroundColor Cyan
 Write-Host ""
