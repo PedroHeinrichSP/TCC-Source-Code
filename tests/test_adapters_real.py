@@ -1,7 +1,9 @@
-"""Testes de validação dos adapters real (NeRF estático e D-NeRF dinâmico)."""
+"""Testes de validacao dos adapters real (NeRF estatico e D-NeRF dinamico)."""
+
+from pathlib import Path
 
 import pytest
-from pathlib import Path
+
 from nvs_benchmark.core import (
     RunConfig,
     DatasetSpec,
@@ -209,6 +211,37 @@ class TestIterationResolution:
         assert "--skip_train" in render_command
         assert "-s" in render_command
         assert str(Path(config.dataset.root).resolve()) in render_command
+
+    def test_gs_static_normalizes_render_names_for_benchmark_metrics(self, tmp_path):
+        """Garante nomes frame_XXXX para casar com referencias exportadas."""
+        adapter = GSStaticAdapter()
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        source_images = []
+        for index in range(2):
+            image_path = source_dir / f"render_{index}.png"
+            image_path.write_bytes(b"png")
+            source_images.append(image_path)
+
+        render_dir = tmp_path / "renders"
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        (dataset_dir / "transforms_test.json").write_text(
+            '{"frames":[{"file_path":"test/r_0"},{"file_path":"test/r_1"}]}',
+            encoding="utf-8",
+        )
+
+        copied = adapter._copy_renders_to_output(
+            source_images=source_images,
+            render_dir=render_dir,
+            dataset_root=dataset_dir,
+            split="test",
+        )
+
+        assert copied == 2
+        assert (render_dir / "frame_0000.png").exists()
+        assert (render_dir / "frame_0001.png").exists()
+        assert not (render_dir / "r_0.png").exists()
 
 
 class TestIntegration:

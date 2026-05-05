@@ -426,41 +426,16 @@ print(json.dumps(result))
         if not source_images:
             return 0
 
+        render_dir.mkdir(parents=True, exist_ok=True)
         for old in render_dir.glob("*.png"):
             old.unlink(missing_ok=True)
 
-        expected = self._expected_test_names(dataset_root=dataset_root, split=split)
         copied = 0
-        if expected and len(expected) == len(source_images):
-            for source, target_name in zip(source_images, expected):
-                shutil.copyfile(source, render_dir / target_name)
-                copied += 1
-            return copied
 
         for index, source in enumerate(source_images):
-            target_name = source.name
-            if (render_dir / target_name).exists():
-                target_name = f"frame_{index:04d}.png"
+            # Normalize filenames to the benchmark convention used by
+            # exported references so quality metrics can match pairs.
+            target_name = f"frame_{index:04d}.png"
             shutil.copyfile(source, render_dir / target_name)
             copied += 1
         return copied
-
-    def _expected_test_names(self, dataset_root: Path, split: str) -> list[str]:
-        transforms_path = dataset_root / f"transforms_{split}.json"
-        if not transforms_path.exists() and split != "test":
-            transforms_path = dataset_root / "transforms_test.json"
-        if not transforms_path.exists():
-            return []
-
-        payload = json.loads(transforms_path.read_text(encoding="utf-8-sig"))
-        frames = payload.get("frames", [])
-        expected: list[str] = []
-        for frame in frames:
-            if not isinstance(frame, dict):
-                continue
-            file_path = frame.get("file_path")
-            if not isinstance(file_path, str) or not file_path:
-                continue
-            stem = Path(file_path).name
-            expected.append(f"{stem}.png")
-        return expected
