@@ -292,6 +292,9 @@ print(json.dumps(result))
         if gs_iterations is not None:
             command.extend(["--iterations", str(gs_iterations)])
 
+        if self._uses_blender_synthetic_defaults(config):
+            command.extend(["--eval", "--white_background"])
+
         extra_args = self._normalize_command(config.extra.get("gs_train_args"))
         if extra_args:
             command.extend(extra_args)
@@ -308,6 +311,15 @@ print(json.dumps(result))
             "-m",
             str(Path(checkpoint_path).resolve()),
         ]
+        if self._uses_blender_synthetic_defaults(config):
+            command.extend(
+                [
+                    "-s",
+                    str(Path(config.dataset.root).resolve()),
+                    "--eval",
+                    "--white_background",
+                ]
+            )
         if split == "test":
             command.append("--skip_train")
         elif split == "train":
@@ -317,6 +329,9 @@ print(json.dumps(result))
         if extra_args:
             command.extend(extra_args)
         return command
+
+    def _uses_blender_synthetic_defaults(self, config: RunConfig) -> bool:
+        return config.dataset.name == "blender_synthetic"
 
     def _build_env(
         self,

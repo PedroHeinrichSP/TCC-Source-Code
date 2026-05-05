@@ -186,6 +186,31 @@ class TestIterationResolution:
         assert result["N_iter"] == 10000
 
 
+    def test_gs_static_blender_commands_include_eval_and_white_background(self, tmp_path):
+        """Garante flags necessarias para split de teste no Blender Synthetic."""
+        adapter = GSStaticAdapter()
+        dataset_dir = tmp_path / "dataset"
+        model_dir = tmp_path / "model"
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="blender_synthetic", root=str(dataset_dir)),
+            method="gs_static",
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "quick"},
+        )
+
+        train_command = adapter._build_train_command(config, model_dir)
+        render_command = adapter._build_render_command(config, str(model_dir), split="test")
+
+        assert "--eval" in train_command
+        assert "--white_background" in train_command
+        assert "--eval" in render_command
+        assert "--white_background" in render_command
+        assert "--skip_train" in render_command
+        assert "-s" in render_command
+        assert str(Path(config.dataset.root).resolve()) in render_command
+
+
 class TestIntegration:
     """Testes de integração de alto nível."""
 
