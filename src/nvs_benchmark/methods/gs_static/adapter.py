@@ -225,7 +225,7 @@ except Exception as exc:
 else:
     result["torch_version"] = getattr(torch, "__version__", "unknown")
     result["cuda_available"] = bool(torch.cuda.is_available())
-    for module_name in ("diff_gaussian_rasterization", "simple_knn._C"):
+    for module_name in ("diff_gaussian_rasterization", "simple_knn._C", "plyfile"):
         try:
             importlib.import_module(module_name)
         except Exception as exc:

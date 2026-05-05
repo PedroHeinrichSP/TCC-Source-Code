@@ -228,6 +228,21 @@ def print_tail(text: str, *, lines: int = 40, prefix: str = "") -> None:
             print(f"{prefix}{line}" if prefix else line)
 
 
+def install_python_runtime_deps(label: str, packages: list[str]) -> bool:
+    install_cmd = [sys.executable, "-m", "pip", "install", *packages]
+    print(f"\nInstalando dependencias Python de runtime para {label}: {', '.join(packages)}")
+    print(f"$ {' '.join(install_cmd)}")
+    result = subprocess.run(install_cmd, text=True, capture_output=True)
+    print_tail(result.stdout, lines=40)
+    if result.returncode == 0:
+        print(f"OK: dependencias Python de {label} instaladas")
+        return True
+
+    print(f"AVISO: falha ao instalar dependencias Python de {label} (code={result.returncode})")
+    print_tail(result.stderr, lines=30, prefix="  ")
+    return False
+
+
 def install_cuda_submodule(label: str, package_path: Path, *, required: bool = True) -> bool:
     if not package_path.exists():
         level = "warn" if required else "info"
@@ -281,6 +296,8 @@ if gs_path.exists():
         print("[warn] Repositorio Gaussian Splatting incompleto. train.py/render.py nao encontrados.")
         compiled_method_status["gaussian_splatting_repo"] = False
 
+    runtime_deps_ok = install_python_runtime_deps("gaussian-splatting", ["plyfile>=1.0.3", "joblib>=1.4"])
+
     required_submodules = [
         ("diff-gaussian-rasterization", gs_path / "submodules" / "diff-gaussian-rasterization"),
         ("simple-knn", gs_path / "submodules" / "simple-knn"),
@@ -306,7 +323,7 @@ if gs_path.exists():
     if not probe_ok:
         print("[warn] Probe final das extensoes do gs_static falhou.")
         print_tail(probe.stderr, lines=20, prefix="  ")
-    compiled_method_status["gs_static_extensions"] = required_ok and probe_ok
+    compiled_method_status["gs_static_extensions"] = runtime_deps_ok and required_ok and probe_ok
 else:
     print("[info] Repositorio gaussian_splatting ausente; pulando compilacao de extensoes.")
     compiled_method_status["gaussian_splatting_repo"] = False
