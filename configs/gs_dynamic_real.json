@@ -1,0 +1,7 @@
+{
+  "gs_dynamic_repo_path": "./third_party/4d_gaussians",
+  "python_executable": "python",
+  "gs_dynamic_eval_split": "test",
+  "gs_dynamic_port": 6017,
+  "gs_dynamic_time_resolution": 25
+}

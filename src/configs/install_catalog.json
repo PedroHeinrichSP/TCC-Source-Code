@@ -7,6 +7,14 @@
       "url": "https://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_example_data.zip",
       "command": "bash -c 'set -e; out=nerf_example_data.zip; url=https://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_example_data.zip; mkdir -p ./data/blender_synthetic; curl -L \"$url\" -o \"$out\"; unzip -q \"$out\" -d ./data/blender_synthetic; rm \"$out\"'",
       "size_mb": 1700
+    },
+    {
+      "id": "d_nerf",
+      "label": "D-NeRF Dynamic Dataset",
+      "path": "./data/d_nerf/lego",
+      "url": "https://www.dropbox.com/s/0bf6fl0ye2vz3vr/data.zip?dl=1",
+      "command": "bash -c 'set -e; out=dnerf_data.zip; url=https://www.dropbox.com/s/0bf6fl0ye2vz3vr/data.zip?dl=1; tmp=./data/.dnerf_tmp; mkdir -p \"$tmp\" ./data/d_nerf; curl -L \"$url\" -o \"$out\"; unzip -q \"$out\" -d \"$tmp\"; if [ -d \"$tmp/data\" ]; then mv \"$tmp/data\"/* ./data/d_nerf/; else mv \"$tmp\"/* ./data/d_nerf/; fi; rm -rf \"$tmp\" \"$out\"'",
+      "size_mb": null
     }
   ],
   "methods": [
@@ -39,7 +47,7 @@
       "label": "4D Gaussian Splatting",
       "path": "./third_party/4d_gaussians",
       "url": "https://github.com/hustvl/4DGaussians",
-      "command": "git clone https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
+      "command": "git clone --recursive https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
       "size_mb": null
     }
   ],

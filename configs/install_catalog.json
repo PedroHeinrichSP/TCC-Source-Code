@@ -16,7 +16,7 @@
       "id": "d_nerf",
       "label": "D-NeRF Dynamic Dataset",
       "description": "Dataset de cenas dinamicas com metadados temporais. Usado em D-NeRF e metodos dinamicos.",
-      "path": "./data/d_nerf",
+      "path": "./data/d_nerf/lego",
       "url": "https://github.com/albertpumarola/D-NeRF",
       "command": "powershell -NoProfile -Command \"Write-Host 'D-NeRF dataset: baixe manualmente em https://www.albertpumarola.com/research/D-NeRF/index.html e extraia em ./data/d_nerf'\"",
       "size_mb": 700,
@@ -86,7 +86,7 @@
       "description": "Extensao do 3DGS para cenas dinamicas usando gaussianas 4D (espaco-tempo).",
       "path": "./third_party/4d_gaussians",
       "url": "https://github.com/hustvl/4DGaussians",
-      "command": "git clone https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
+      "command": "git clone --recursive https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
       "size_mb": null,
       "paper": "4D Gaussian Splatting for Real-Time Dynamic Scene Rendering (Wu et al., 2024)"
     }

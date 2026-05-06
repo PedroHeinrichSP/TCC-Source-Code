@@ -75,6 +75,10 @@ class Orchestrator:
         if method_eval_split:
             return method_eval_split
 
+        dynamic_eval_split = str(config.extra.get("gs_dynamic_eval_split", "")).strip().lower()
+        if dynamic_eval_split:
+            return dynamic_eval_split
+
         if config.dataset.split == "train":
             return "test"
         return config.dataset.split

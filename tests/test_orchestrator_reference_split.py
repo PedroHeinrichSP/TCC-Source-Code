@@ -36,3 +36,15 @@ def test_resolve_reference_split_uses_method_eval_split_when_available():
     )
 
     assert Orchestrator._resolve_reference_split(config) == "test"
+
+
+def test_resolve_reference_split_uses_dynamic_method_eval_split_when_available():
+    config = RunConfig(
+        run_id="test",
+        dataset=DatasetSpec(name="d_nerf", root="/tmp/dataset", split="train"),
+        method="gs_dynamic",
+        hardware_profile=HardwareProfile.ADAPTIVE,
+        extra={"gs_dynamic_eval_split": "test"},
+    )
+
+    assert Orchestrator._resolve_reference_split(config) == "test"
