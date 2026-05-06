@@ -59,6 +59,27 @@ class Orchestrator:
         return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     @staticmethod
+    def _resolve_reference_split(config: RunConfig) -> str:
+        """Resolve o split de referencia a ser usado nas metricas.
+
+        O split informado no dataset normalmente representa o conjunto usado
+        para treino. Para os adapters reais atuais, a inferencia padrao usa o
+        split de teste; logo, quando o treino ocorre em ``train`` e nao ha
+        override explicito, as referencias tambem devem vir de ``test``.
+        """
+        explicit = str(config.extra.get("reference_split", "")).strip().lower()
+        if explicit:
+            return explicit
+
+        method_eval_split = str(config.extra.get("gs_eval_split", "")).strip().lower()
+        if method_eval_split:
+            return method_eval_split
+
+        if config.dataset.split == "train":
+            return "test"
+        return config.dataset.split
+
+    @staticmethod
     def _metrics_from_cache_payload(payload: dict[str, Any]) -> BenchmarkMetrics:
         return BenchmarkMetrics(
             method=str(payload["method"]),
@@ -201,9 +222,10 @@ class Orchestrator:
                 ref_dir = Path(reference_dir)
             else:
                 ref_dir = Path(config.output_dir) / config.run_id / config.method / "references"
+                reference_split = self._resolve_reference_split(config)
                 copied = export_reference_frames_from_dataset(
                     root=config.dataset.root,
-                    split=config.dataset.split,
+                    split=reference_split,
                     reference_dir=ref_dir,
                 )
                 if copied == 0:
