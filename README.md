@@ -43,8 +43,13 @@ bash ./scripts/linux/generate_report.sh
 
 O metodo `gs_static` usa a integracao oficial do Gaussian Splatting e requer ambiente compatível com CUDA para execucao real. Em hosts sem CUDA, os comandos de smoke da CLI registram `gs_static` como `skipped` por incompatibilidade de hardware, em vez de reportar sucesso falso.
 
+## Nota sobre `gs_dynamic`
+
+O metodo `gs_dynamic` integra o repositório `4DGaussians`, mas nao deve ser tratado como executavel de forma confiavel no Colab atual com Python moderno sem validacao extra do ambiente. A principal limitacao nao esta no benchmark, e sim na compatibilidade do stack upstream com esse runtime.
+
 ## Documentacao
 
 - [Fluxo de execucao](docs/FLUXO_DE_EXECUCAO.md)
+- [Limitacoes do 4DGS no Colab](docs/4DGS_COLAB_LIMITACOES.md)
 - [Guia de scripts](scripts/README.md)
 - [Guia de notebooks](notebooks/README.md)
