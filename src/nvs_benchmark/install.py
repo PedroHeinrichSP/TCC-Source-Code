@@ -107,14 +107,16 @@ def _suggest_command(item: InstallItem) -> str:
     return ""
 
 
-def _prefer_current_python(command: str) -> str:
+def _prefer_current_python(command: str, *, windows: bool = False) -> str:
     stripped = command.lstrip()
     leading = command[: len(command) - len(stripped)]
+    replacement_prefix = f'& "{sys.executable}"' if windows else f'"{sys.executable}"'
     for prefix in ("python ", "python3 ", "py "):
         if stripped.startswith(prefix):
-            return f'{leading}"{sys.executable}" {stripped[len(prefix):]}'
+            remainder = stripped[len(prefix):].lstrip()
+            return f"{leading}{replacement_prefix}{(' ' + remainder) if remainder else ''}"
     if stripped in {"python", "python3", "py"}:
-        return f'{leading}"{sys.executable}"'
+        return f"{leading}{replacement_prefix}"
     return command
 
 
@@ -124,8 +126,8 @@ def _exec_cross_platform(command: str) -> subprocess.CompletedProcess:
     No Windows: usa PowerShell
     No Linux/macOS: usa sh
     """
-    command = _prefer_current_python(command)
     os_name = platform.system()
+    command = _prefer_current_python(command, windows=(os_name == "Windows"))
     if os_name == "Windows":
         # Windows: use PowerShell natively
         return subprocess.run(
