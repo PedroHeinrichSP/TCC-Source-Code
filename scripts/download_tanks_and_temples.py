@@ -15,7 +15,18 @@ OFFICIAL_DOWNLOADER_URL = (
 def download_official_downloader(destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     urllib.request.urlretrieve(OFFICIAL_DOWNLOADER_URL, destination)
+    patch_official_downloader(destination)
     return destination
+
+
+def patch_official_downloader(script_path: Path) -> None:
+    source = script_path.read_text(encoding="utf-8-sig")
+    patched_source = source.replace(
+        "with open(fname) as f:",
+        'with open(fname, encoding="utf-8-sig", errors="replace") as f:',
+    )
+    if patched_source != source:
+        script_path.write_text(patched_source, encoding="utf-8")
 
 
 def build_command(script_path: Path, pathname: Path, group: str, modality: str) -> list[str]:
