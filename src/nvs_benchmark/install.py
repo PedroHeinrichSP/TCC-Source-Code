@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import platform
-import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
@@ -86,7 +86,17 @@ def load_install_catalog(catalog_file: str | Path) -> InstallCatalog:
 def _is_installed(path_value: str) -> bool:
     if not path_value:
         return False
-    return Path(path_value).exists()
+    path = Path(path_value)
+    if not path.exists():
+        return False
+    if path.is_file():
+        return True
+    if path.is_dir():
+        try:
+            return any(path.iterdir())
+        except OSError:
+            return True
+    return True
 
 
 def _suggest_command(item: InstallItem) -> str:
@@ -97,12 +107,24 @@ def _suggest_command(item: InstallItem) -> str:
     return ""
 
 
+def _prefer_current_python(command: str) -> str:
+    stripped = command.lstrip()
+    leading = command[: len(command) - len(stripped)]
+    for prefix in ("python ", "python3 ", "py "):
+        if stripped.startswith(prefix):
+            return f'{leading}"{sys.executable}" {stripped[len(prefix):]}'
+    if stripped in {"python", "python3", "py"}:
+        return f'{leading}"{sys.executable}"'
+    return command
+
+
 def _exec_cross_platform(command: str) -> subprocess.CompletedProcess:
     """Executa comando shell de forma cross-platform.
     
     No Windows: usa PowerShell
     No Linux/macOS: usa sh
     """
+    command = _prefer_current_python(command)
     os_name = platform.system()
     if os_name == "Windows":
         # Windows: use PowerShell natively

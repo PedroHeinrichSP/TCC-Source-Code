@@ -3,6 +3,7 @@ numpy>=1.26
 pandas>=2.2
 pyyaml>=6.0
 scikit-image>=0.22
+requests>=2.31
 lpips>=0.1.4
 torch>=2.2
 torchvision>=0.17
