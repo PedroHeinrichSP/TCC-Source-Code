@@ -101,6 +101,19 @@ def _save_image_as_png(source_path: Path, target_path: Path) -> None:
     mpimg.imsave(target_path, image)
 
 
+def _candidate_reference_images(root_path: Path) -> list[Path]:
+    """Coleta imagens candidatas diretamente na cena ou no diretório images/."""
+    patterns = ("*.png", "*.jpg", "*.jpeg", "*.JPG", "*.PNG")
+    candidates: list[Path] = []
+    for folder in (root_path, root_path / "images", root_path / "image"):
+        if not folder.exists() or not folder.is_dir():
+            continue
+        for pattern in patterns:
+            candidates.extend(folder.glob(pattern))
+    unique_candidates = sorted({candidate.resolve() for candidate in candidates}, key=lambda path: path.name.lower())
+    return unique_candidates
+
+
 def export_reference_frames_from_dataset(
     root: str | Path,
     split: str | None,
@@ -145,5 +158,12 @@ def export_reference_frames_from_dataset(
 
         if copied > 0:
             return copied
+
+    image_candidates = _candidate_reference_images(root_path)
+    if image_candidates:
+        for index, resolved in enumerate(image_candidates):
+            target_path = reference_dir / f"frame_{index:04d}.png"
+            _save_image_as_png(resolved, target_path)
+        return len(image_candidates)
 
     return copied

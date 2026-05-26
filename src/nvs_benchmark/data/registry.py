@@ -24,6 +24,12 @@ def _count_image_files(root: Path) -> int:
     return total
 
 
+def _has_direct_image_files(root: Path) -> bool:
+    """Verifica se o diretório contém imagens diretamente no nível raiz."""
+    patterns = ("*.png", "*.jpg", "*.jpeg", "*.JPG", "*.PNG")
+    return any(next(root.glob(pattern), None) is not None for pattern in patterns)
+
+
 def _existing_splits(root: Path) -> list[str]:
     """Lista splits disponíveis com base em arquivos transforms_<split>.json."""
     splits: list[str] = []
@@ -214,9 +220,9 @@ class TanksAndTemplesLoader:
             # Aceitar estrutura com poses_bounds.npy (LLFF) ou diretório images/
             images_dir = root_path / "images"
             poses_bounds = root_path / "poses_bounds.npy"
-            if not images_dir.exists() and not poses_bounds.exists():
+            if not images_dir.exists() and not poses_bounds.exists() and not _has_direct_image_files(root_path):
                 raise DatasetValidationError(
-                    "Tanks and Temples requer transforms_*.json, images/ ou poses_bounds.npy."
+                    "Tanks and Temples requer transforms_*.json, images/, poses_bounds.npy ou imagens diretamente na cena."
                 )
 
     def load(self, root: str | Path, split: str = "train") -> DatasetSpec:
