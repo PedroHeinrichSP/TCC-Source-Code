@@ -43,13 +43,21 @@ def has_pose_priors(root: Path) -> bool:
     return has_required_blender_splits(root) or (root / "sparse" / "0").exists()
 
 
-def _project_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+def _resolve_colmap_loader_path() -> Path:
+    current_file = Path(__file__).resolve()
+    for parent in current_file.parents:
+        candidate = parent / "third_party" / "gaussian_splatting" / "scene" / "colmap_loader.py"
+        if candidate.exists():
+            return candidate
+    raise RuntimeError(
+        "Nao foi possivel localizar third_party/gaussian_splatting/scene/colmap_loader.py "
+        f"a partir de {current_file}."
+    )
 
 
 @lru_cache(maxsize=1)
 def _load_colmap_loader_module():
-    module_path = _project_root() / "third_party" / "gaussian_splatting" / "scene" / "colmap_loader.py"
+    module_path = _resolve_colmap_loader_path()
     spec = importlib.util.spec_from_file_location("nvs_benchmark_colmap_loader", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Nao foi possivel carregar helpers COLMAP em: {module_path}")
