@@ -375,7 +375,65 @@ if PROJECT_ROOT is None:
 
 os.chdir(PROJECT_ROOT)
 
-load_state()
+
+# ---- cell ----
+# Consolidar selecao do notebook
+# A celula inicial acima eh a fonte principal de verdade.
+DEFAULT_SELECTION = {
+    "SELECTED_METHOD": SELECTED_METHOD,
+    "SELECTED_DATASET": SELECTED_DATASET,
+    "SELECTED_PRESET": SELECTED_PRESET,
+    "RUN_MODE": RUN_MODE,
+    "STRICT_RESULTS": STRICT_RESULTS,
+    "GENERATE_PDF": GENERATE_PDF,
+    "MIN_REQUIRED_PAIRS": MIN_REQUIRED_PAIRS,
+    "LOAD_SAVED_SELECTION": LOAD_SAVED_SELECTION,
+    "ENABLE_NERF_MEMORY_TUNING": ENABLE_NERF_MEMORY_TUNING,
+    "FALLBACK_TO_SMOKE_ON_OOM": FALLBACK_TO_SMOKE_ON_OOM,
+    "SELECTED_SCENE_NAME": SELECTED_SCENE_NAME,
+    "SELECTED_TT_SCENE_NAME": SELECTED_TT_SCENE_NAME,
+}
+
+
+def _resolve_default(name: str, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    if isinstance(default, bool):
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(default, int):
+        try:
+            return int(raw_value)
+        except ValueError:
+            return default
+    return raw_value
+
+
+if LOAD_SAVED_SELECTION:
+    load_state()
+
+SELECTED_METHOD = _resolve_default("NVS_SELECTED_METHOD", DEFAULT_SELECTION["SELECTED_METHOD"])
+SELECTED_DATASET = _resolve_default("NVS_SELECTED_DATASET", DEFAULT_SELECTION["SELECTED_DATASET"])
+SELECTED_PRESET = _resolve_default("NVS_SELECTED_PRESET", DEFAULT_SELECTION["SELECTED_PRESET"])
+RUN_MODE = _resolve_default("NVS_RUN_MODE", DEFAULT_SELECTION["RUN_MODE"])
+STRICT_RESULTS = _resolve_default("NVS_STRICT_RESULTS", DEFAULT_SELECTION["STRICT_RESULTS"])
+GENERATE_PDF = _resolve_default("NVS_GENERATE_PDF", DEFAULT_SELECTION["GENERATE_PDF"])
+MIN_REQUIRED_PAIRS = _resolve_default("NVS_MIN_REQUIRED_PAIRS", DEFAULT_SELECTION["MIN_REQUIRED_PAIRS"])
+LOAD_SAVED_SELECTION = _resolve_default("NVS_LOAD_SAVED_SELECTION", DEFAULT_SELECTION["LOAD_SAVED_SELECTION"])
+ENABLE_NERF_MEMORY_TUNING = _resolve_default(
+    "NVS_ENABLE_NERF_MEMORY_TUNING",
+    DEFAULT_SELECTION["ENABLE_NERF_MEMORY_TUNING"],
+)
+FALLBACK_TO_SMOKE_ON_OOM = _resolve_default(
+    "NVS_FALLBACK_TO_SMOKE_ON_OOM",
+    DEFAULT_SELECTION["FALLBACK_TO_SMOKE_ON_OOM"],
+)
+SELECTED_SCENE_NAME = _resolve_default("NVS_SELECTED_SCENE_NAME", DEFAULT_SELECTION["SELECTED_SCENE_NAME"])
+SELECTED_TT_SCENE_NAME = _resolve_default(
+    "NVS_SELECTED_TT_SCENE_NAME",
+    DEFAULT_SELECTION["SELECTED_TT_SCENE_NAME"],
+)
+
 if SELECTED_DATASET_ROOT:
     SELECTED_DATASET_ROOT = resolve_saved_scene_root(SELECTED_DATASET, SELECTED_DATASET_ROOT)
 RUN_ID = generate_run_id(ENVIRONMENT, SELECTED_PRESET, SELECTED_METHOD, SELECTED_DATASET)
@@ -411,64 +469,6 @@ if SELECTED_DATASET in MANUAL_DATASET_IDS:
         " informe SELECTED_DATASET_ROOT para a cena desejada."
     )
 print("=" * 70)
-
-save_state(resolved_dataset_root)
-
-
-# ---- cell ----
-# Defaults de selecao do notebook
-# Mantem um padrao unico e permite override via variaveis de ambiente.
-DEFAULT_SELECTION = {
-    "SELECTED_METHOD": "nerf_static",
-    "SELECTED_DATASET": "blender_synthetic",
-    "SELECTED_PRESET": "quick",
-    "RUN_MODE": "full",
-    "STRICT_RESULTS": True,
-    "GENERATE_PDF": False,
-    "MIN_REQUIRED_PAIRS": 1,
-    "LOAD_SAVED_SELECTION": False,
-    "ENABLE_NERF_MEMORY_TUNING": True,
-    "FALLBACK_TO_SMOKE_ON_OOM": True,
-    "SELECTED_SCENE_NAME": "garden",
-    "SELECTED_TT_SCENE_NAME": "Family",
-}
-
-
-def _resolve_default(name: str, default):
-    raw_value = os.environ.get(name)
-    if raw_value is None or raw_value == "":
-        return default
-    if isinstance(default, bool):
-        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
-    if isinstance(default, int):
-        try:
-            return int(raw_value)
-        except ValueError:
-            return default
-    return raw_value
-
-
-SELECTED_METHOD = _resolve_default("NVS_SELECTED_METHOD", DEFAULT_SELECTION["SELECTED_METHOD"])
-SELECTED_DATASET = _resolve_default("NVS_SELECTED_DATASET", DEFAULT_SELECTION["SELECTED_DATASET"])
-SELECTED_PRESET = _resolve_default("NVS_SELECTED_PRESET", DEFAULT_SELECTION["SELECTED_PRESET"])
-RUN_MODE = _resolve_default("NVS_RUN_MODE", DEFAULT_SELECTION["RUN_MODE"])
-STRICT_RESULTS = _resolve_default("NVS_STRICT_RESULTS", DEFAULT_SELECTION["STRICT_RESULTS"])
-GENERATE_PDF = _resolve_default("NVS_GENERATE_PDF", DEFAULT_SELECTION["GENERATE_PDF"])
-MIN_REQUIRED_PAIRS = _resolve_default("NVS_MIN_REQUIRED_PAIRS", DEFAULT_SELECTION["MIN_REQUIRED_PAIRS"])
-LOAD_SAVED_SELECTION = _resolve_default("NVS_LOAD_SAVED_SELECTION", DEFAULT_SELECTION["LOAD_SAVED_SELECTION"])
-ENABLE_NERF_MEMORY_TUNING = _resolve_default(
-    "NVS_ENABLE_NERF_MEMORY_TUNING",
-    DEFAULT_SELECTION["ENABLE_NERF_MEMORY_TUNING"],
-)
-FALLBACK_TO_SMOKE_ON_OOM = _resolve_default(
-    "NVS_FALLBACK_TO_SMOKE_ON_OOM",
-    DEFAULT_SELECTION["FALLBACK_TO_SMOKE_ON_OOM"],
-)
-SELECTED_SCENE_NAME = _resolve_default("NVS_SELECTED_SCENE_NAME", DEFAULT_SELECTION["SELECTED_SCENE_NAME"])
-SELECTED_TT_SCENE_NAME = _resolve_default(
-    "NVS_SELECTED_TT_SCENE_NAME",
-    DEFAULT_SELECTION["SELECTED_TT_SCENE_NAME"],
-)
 
 
 # ---- cell ----
@@ -868,6 +868,7 @@ else:
 if dataset_root is None and INSTALL_DATASET_IF_MISSING:
     if not CATALOG_FILE.exists():
         raise FileNotFoundError(f"Catalogo nao encontrado: {CATALOG_FILE}")
+    print(f"Gerando catalogo temporario para dataset: {SELECTED_DATASET}")
     filtered_catalog = write_single_dataset_catalog(SELECTED_DATASET)
     install_cmd = [
         sys.executable,
