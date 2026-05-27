@@ -419,12 +419,14 @@ class NeRFDynamicAdapter:
             cwd=str(cwd),
             env=env,
             capture_output=True,
-            text=True,
+            text=False,
             check=False,
         )
+        stdout_text = completed.stdout.decode("utf-8", errors="replace") if completed.stdout else ""
+        stderr_text = completed.stderr.decode("utf-8", errors="replace") if completed.stderr else ""
         if completed.returncode != 0:
-            stdout = completed.stdout[-4000:] if completed.stdout else ""
-            stderr = completed.stderr[-4000:] if completed.stderr else ""
+            stdout = stdout_text[-4000:] if stdout_text else ""
+            stderr = stderr_text[-4000:] if stderr_text else ""
             raise RuntimeError(
                 f"Falha em {self.method_id}::{stage} (exit={completed.returncode}).\n"
                 f"Comando: {' '.join(command)}\n"
