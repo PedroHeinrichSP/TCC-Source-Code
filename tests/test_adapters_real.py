@@ -21,6 +21,52 @@ from nvs_benchmark.methods.gs_dynamic.adapter import GSDynamicAdapter, GSDynamic
 from nvs_benchmark.core.presets import resolve_iterations
 
 
+def _write_dummy_repo(repo_dir: Path, *filenames: str) -> Path:
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    for filename in filenames:
+        (repo_dir / filename).write_text("# stub\n", encoding="utf-8")
+    return repo_dir
+
+
+def _build_colmap_scene(scene_root: Path) -> Path:
+    images_dir = scene_root / "images"
+    sparse_dir = scene_root / "sparse" / "0"
+    images_dir.mkdir(parents=True)
+    sparse_dir.mkdir(parents=True)
+
+    imageio.imwrite(images_dir / "frame_0001.png", np.array([[[255, 0, 0, 255]]], dtype=np.uint8))
+    imageio.imwrite(images_dir / "frame_0002.png", np.array([[[0, 255, 0, 255]]], dtype=np.uint8))
+
+    (sparse_dir / "cameras.txt").write_text(
+        "# Camera list\n"
+        "1 PINHOLE 1 1 1 1 0.5 0.5\n",
+        encoding="utf-8",
+    )
+    (sparse_dir / "images.txt").write_text(
+        "# Image list\n"
+        "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+        "0 0 -1\n"
+        "2 1 0 0 0 0 0 0 1 frame_0002.png\n"
+        "0 0 -1\n",
+        encoding="utf-8",
+    )
+    return scene_root
+
+
+def _cuda_runtime_probe() -> dict[str, object]:
+    return {
+        "python_executable": "python",
+        "torch_version": "2.2.0",
+        "cuda_available": True,
+        "module_errors": {
+            "diff_gaussian_rasterization": None,
+            "simple_knn._C": None,
+            "mmcv": None,
+            "plyfile": None,
+        },
+    }
+
+
 class TestAdapterInstantiation:
     """Testes de instanciação dos adapters."""
 
@@ -87,28 +133,7 @@ class TestAdapterValidation:
     def test_nerf_static_prepares_mipnerf360_scene(self, tmp_path):
         """Mip-NeRF 360 static scene should be converted to a Blender-style root."""
         adapter = NeRFStaticAdapter()
-        scene_root = tmp_path / "mipnerf360" / "garden"
-        images_dir = scene_root / "images"
-        sparse_dir = scene_root / "sparse" / "0"
-        images_dir.mkdir(parents=True)
-        sparse_dir.mkdir(parents=True)
-
-        imageio.imwrite(images_dir / "frame_0001.png", np.array([[[255, 0, 0, 255]]], dtype=np.uint8))
-        imageio.imwrite(images_dir / "frame_0002.png", np.array([[[0, 255, 0, 255]]], dtype=np.uint8))
-
-        (sparse_dir / "cameras.txt").write_text(
-            "# Camera list\n"
-            "1 PINHOLE 1 1 1 1 0.5 0.5\n",
-            encoding="utf-8",
-        )
-        (sparse_dir / "images.txt").write_text(
-            "# Image list\n"
-            "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
-            "0 0 -1\n"
-            "2 1 0 0 0 0 0 0 1 frame_0002.png\n"
-            "0 0 -1\n",
-            encoding="utf-8",
-        )
+        scene_root = _build_colmap_scene(tmp_path / "mipnerf360" / "garden")
 
         config = RunConfig(
             run_id="test",
@@ -139,28 +164,7 @@ class TestAdapterValidation:
     def test_nerf_static_train_uses_prepared_mipnerf360_root(self, tmp_path, monkeypatch):
         """Training should pass the converted Mip-NeRF 360 root to the backend."""
         adapter = NeRFStaticAdapter()
-        scene_root = tmp_path / "mipnerf360" / "garden"
-        images_dir = scene_root / "images"
-        sparse_dir = scene_root / "sparse" / "0"
-        images_dir.mkdir(parents=True)
-        sparse_dir.mkdir(parents=True)
-
-        imageio.imwrite(images_dir / "frame_0001.png", np.array([[[255, 0, 0, 255]]], dtype=np.uint8))
-        imageio.imwrite(images_dir / "frame_0002.png", np.array([[[0, 255, 0, 255]]], dtype=np.uint8))
-
-        (sparse_dir / "cameras.txt").write_text(
-            "# Camera list\n"
-            "1 PINHOLE 1 1 1 1 0.5 0.5\n",
-            encoding="utf-8",
-        )
-        (sparse_dir / "images.txt").write_text(
-            "# Image list\n"
-            "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
-            "0 0 -1\n"
-            "2 1 0 0 0 0 0 0 1 frame_0002.png\n"
-            "0 0 -1\n",
-            encoding="utf-8",
-        )
+        scene_root = _build_colmap_scene(tmp_path / "mipnerf360" / "garden")
 
         config = RunConfig(
             run_id="test",
@@ -187,17 +191,80 @@ class TestAdapterValidation:
 
         assert captured["stage"] == "train"
         assert "prepared_dataset" in str(captured["env"]["NVS_DATASET_ROOT"])
+        assert Path(captured["env"]["NVS_DATASET_ROOT"]).is_absolute()
         assert f"datadir = {captured['env']['NVS_DATASET_ROOT']}" in config_text
         assert result.checkpoint_path.endswith("checkpoint.tar")
+
+    @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
+    def test_nerf_dynamic_prepares_real_scene_with_time_metadata(self, tmp_path, dataset_name):
+        """D-NeRF should convert real static scenes to Blender-style frames with synthetic time=0."""
+        adapter = NeRFDynamicAdapter()
+        scene_root = _build_colmap_scene(tmp_path / dataset_name / "scene")
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name=dataset_name, root=str(scene_root)),
+            method="nerf_dynamic",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+        )
+
+        prepared_root = adapter._resolve_dataset_root(
+            config,
+            Path(config.output_dir) / config.run_id / adapter.method_id,
+        )
+
+        assert prepared_root != scene_root
+        assert prepared_root.is_absolute()
+        train_payload = json.loads((prepared_root / "transforms_train.json").read_text(encoding="utf-8"))
+        test_payload = json.loads((prepared_root / "transforms_test.json").read_text(encoding="utf-8"))
+
+        assert train_payload["frames"][0]["time"] == 0.0
+        assert test_payload["frames"][0]["time"] == 0.0
+
+    @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
+    def test_gs_static_accepts_real_scenes(self, tmp_path, monkeypatch, dataset_name):
+        """3DGS should validate real static COLMAP scenes."""
+        adapter = GSStaticAdapter()
+        repo_dir = _write_dummy_repo(tmp_path / "gaussian_splatting", "train.py", "render.py")
+        dataset_dir = _build_colmap_scene(tmp_path / dataset_name / "scene")
+
+        monkeypatch.setattr(adapter, "_probe_runtime", lambda config: _cuda_runtime_probe())
+
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name=dataset_name, root=str(dataset_dir)),
+            method="gs_static",
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"gs_repo_path": str(repo_dir)},
+        )
+
+        adapter.validate_config(config)
+
+    @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
+    def test_gs_dynamic_accepts_real_scenes(self, tmp_path, monkeypatch, dataset_name):
+        """4DGS should validate real scenes when COLMAP poses are available."""
+        adapter = GSDynamicAdapter()
+        repo_dir = _write_dummy_repo(tmp_path / "4d_gaussians", "train.py", "render.py")
+        dataset_dir = _build_colmap_scene(tmp_path / dataset_name / "scene")
+
+        monkeypatch.setattr(adapter, "_probe_runtime", lambda config: _cuda_runtime_probe())
+
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name=dataset_name, root=str(dataset_dir)),
+            method="gs_dynamic",
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"gs_dynamic_repo_path": str(repo_dir)},
+        )
+
+        adapter.validate_config(config)
 
 
     def test_gs_static_validate_config_requires_cuda(self, tmp_path, monkeypatch):
         """Testa que gs_static falha cedo em host sem CUDA."""
         adapter = GSStaticAdapter()
-        repo_dir = tmp_path / "gaussian_splatting"
-        repo_dir.mkdir()
-        (repo_dir / "train.py").write_text("# train\n", encoding="utf-8")
-        (repo_dir / "render.py").write_text("# render\n", encoding="utf-8")
+        repo_dir = _write_dummy_repo(tmp_path / "gaussian_splatting", "train.py", "render.py")
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
 
@@ -241,10 +308,7 @@ class TestAdapterValidation:
     def test_gs_dynamic_validate_config_requires_cuda(self, tmp_path, monkeypatch):
         """4DGS deve falhar cedo em host sem CUDA."""
         adapter = GSDynamicAdapter()
-        repo_dir = tmp_path / "4d_gaussians"
-        repo_dir.mkdir()
-        (repo_dir / "train.py").write_text("# train\n", encoding="utf-8")
-        (repo_dir / "render.py").write_text("# render\n", encoding="utf-8")
+        repo_dir = _write_dummy_repo(tmp_path / "4d_gaussians", "train.py", "render.py")
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
 
@@ -348,15 +412,23 @@ class TestIterationResolution:
         )
         assert result["N_iter"] == 10000
 
-    def test_gs_dynamic_generates_dnerf_config(self, tmp_path):
-        """Config automatica do 4DGS deve refletir preset e defaults D-NeRF."""
+    @pytest.mark.parametrize(
+        ("dataset_name", "metadata"),
+        [
+            ("d_nerf", {"has_time_metadata": True}),
+            ("mipnerf360", {}),
+            ("tanks_and_temples", {}),
+        ],
+    )
+    def test_gs_dynamic_generates_config_for_supported_real_datasets(self, tmp_path, dataset_name, metadata):
+        """Config automatica do 4DGS deve funcionar para datasets dinamicos e cenas reais."""
         adapter = GSDynamicAdapter()
         config = RunConfig(
             run_id="test",
             dataset=DatasetSpec(
-                name="d_nerf",
+                name=dataset_name,
                 root=str(tmp_path / "lego"),
-                metadata={"has_time_metadata": True},
+                metadata=metadata,
             ),
             method="gs_dynamic",
             hardware_profile=HardwareProfile.ADAPTIVE,

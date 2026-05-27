@@ -22,6 +22,7 @@ from nvs_benchmark.core import (
     TrainResult,
 )
 from nvs_benchmark.core.presets import resolve_iterations
+from nvs_benchmark.methods.scene_converters import has_pose_priors, has_real_scene_layout
 
 
 class GSDynamicRuntimeError(RuntimeError):
@@ -78,7 +79,7 @@ class GSDynamicAdapter:
                 "4DGaussians nao deve ser usado com blender_synthetic neste benchmark. "
                 "Use um dataset realmente dinamico, como d_nerf."
             )
-        if config.dataset.name not in {"d_nerf", "custom"}:
+        if config.dataset.name not in {"d_nerf", "custom", "mipnerf360", "tanks_and_temples"}:
             raise ValueError("Dataset nao suportado para GS dinamico neste estagio.")
 
         dataset_root = Path(config.dataset.root)
@@ -98,6 +99,15 @@ class GSDynamicAdapter:
                 raise ValueError(
                     "Dataset d_nerf sem metadados temporais detectados. "
                     "As entradas de transforms devem conter campo 'time'."
+                )
+        elif config.dataset.name in {"mipnerf360", "tanks_and_temples"}:
+            if not has_real_scene_layout(dataset_root):
+                raise ValueError(
+                    f"{config.dataset.name} requer uma cena extraida com images/, sparse/0, poses_bounds.npy ou imagens diretas."
+                )
+            if not has_pose_priors(dataset_root):
+                raise ValueError(
+                    f"{config.dataset.name} requer poses/cameras em sparse/0 ou transforms_*.json para treino GS dinamico."
                 )
         elif config.dataset.name == "custom":
             custom_cfg = config.extra.get("gs_dynamic_config_file")
@@ -319,8 +329,10 @@ print(json.dumps(result))
         return config_path
 
     def _build_dnerf_config_text(self, config: RunConfig) -> str:
-        if config.dataset.name != "d_nerf":
-            raise ValueError("Geracao automatica de config 4DGS so esta disponivel para dataset d_nerf.")
+        if config.dataset.name not in {"d_nerf", "mipnerf360", "tanks_and_temples"}:
+            raise ValueError(
+                "Geracao automatica de config 4DGS so esta disponivel para d_nerf, mipnerf360 ou tanks_and_temples."
+            )
 
         iter_params = resolve_iterations(
             method_id=self.method_id,
@@ -389,7 +401,7 @@ print(json.dumps(result))
             "--model_path",
             str(model_dir.resolve()),
             "--expname",
-            f"dnerf/{Path(config.dataset.root).name}",
+            f"benchmark/{config.dataset.name}/{Path(config.dataset.root).name}",
             "--configs",
             str(config_file.resolve()),
             "--port",

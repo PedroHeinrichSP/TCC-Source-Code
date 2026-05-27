@@ -26,6 +26,12 @@ from nvs_benchmark.core import (
     TrainResult,
 )
 from nvs_benchmark.core.presets import resolve_iterations
+from nvs_benchmark.methods.scene_converters import (
+    has_pose_priors,
+    has_real_scene_layout,
+    has_required_blender_splits,
+    prepare_colmap_scene_to_blender,
+)
 
 
 def _find_images(directory: Path) -> list[Path]:
@@ -71,12 +77,21 @@ class NeRFDynamicAdapter:
         """Valida configuração para cenários de NeRF dinâmico."""
         if config.method != self.method_id:
             raise ValueError(f"Metodo incompativel. Esperado '{self.method_id}', recebido '{config.method}'")
-        if config.dataset.name not in {"d_nerf", "blender_synthetic", "custom"}:
+        if config.dataset.name not in {"d_nerf", "blender_synthetic", "custom", "mipnerf360", "tanks_and_temples"}:
             raise ValueError("Dataset nao suportado para NeRF dinamico neste estagio.")
 
         dataset_root = Path(config.dataset.root)
         if not dataset_root.exists():
             raise ValueError(f"Dataset root nao encontrado: {dataset_root}")
+        if config.dataset.name in {"mipnerf360", "tanks_and_temples"}:
+            if not has_real_scene_layout(dataset_root):
+                raise ValueError(
+                    f"{config.dataset.name} requer uma cena extraida com images/, sparse/0, poses_bounds.npy ou imagens diretas."
+                )
+            if not has_pose_priors(dataset_root):
+                raise ValueError(
+                    f"{config.dataset.name} requer poses/cameras em sparse/0 ou transforms_*.json para treino D-NeRF."
+                )
 
         repo = self._resolve_repo_path(config)
         if not (repo / "run_dnerf.py").exists():
@@ -93,6 +108,7 @@ class NeRFDynamicAdapter:
         output_base = Path(request.config.output_dir) / request.config.run_id / self.method_id
         logs_dir = output_base / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
+        dataset_root = self._resolve_dataset_root(request.config, output_base)
 
         iter_params = resolve_iterations(
             method_id=self.method_id,
@@ -106,10 +122,11 @@ class NeRFDynamicAdapter:
             request.config,
             logs_dir=logs_dir,
             iter_params=iter_params,
+            dataset_root=dataset_root,
         )
 
         command = self._build_train_command(request.config, config_file)
-        env = self._build_env(request.config)
+        env = self._build_env(request.config, dataset_root=dataset_root)
 
         self._run_command(
             command=command,
@@ -133,6 +150,7 @@ class NeRFDynamicAdapter:
                 "repo_path": str(self._resolve_repo_path(request.config)),
                 "command": command,
                 "iter_params": iter_params,
+                "dataset_root": str(dataset_root),
             },
         )
 
@@ -144,6 +162,7 @@ class NeRFDynamicAdapter:
         output_base = Path(request.config.output_dir) / request.config.run_id / self.method_id
         render_dir = output_base / "renders"
         render_dir.mkdir(parents=True, exist_ok=True)
+        dataset_root = self._resolve_dataset_root(request.config, output_base)
 
         checkpoint_dir = Path(request.checkpoint_path)
 
@@ -159,12 +178,13 @@ class NeRFDynamicAdapter:
             request.config,
             logs_dir=checkpoint_dir if checkpoint_dir.is_dir() else checkpoint_dir.parent,
             iter_params=iter_params,
+            dataset_root=dataset_root,
             render_only=True,
             render_test=True,
         )
 
         command = self._build_render_command(request.config, config_file)
-        env = self._build_env(request.config)
+        env = self._build_env(request.config, dataset_root=dataset_root)
 
         self._run_command(
             command=command,
@@ -197,6 +217,7 @@ class NeRFDynamicAdapter:
                 "mode": "real_dnerf_subprocess",
                 "checkpoint_used": request.checkpoint_path,
                 "command": command,
+                "dataset_root": str(dataset_root),
             },
         )
 
@@ -232,11 +253,28 @@ class NeRFDynamicAdapter:
         resolved = str(configured).strip() if configured is not None else ""
         return resolved or sys.executable
 
+    def _resolve_dataset_root(self, config: RunConfig, output_base: Path) -> Path:
+        source_root = Path(config.dataset.root).resolve()
+        if has_required_blender_splits(source_root):
+            return source_root
+
+        if config.dataset.name not in {"mipnerf360", "tanks_and_temples"}:
+            return source_root
+
+        prepared_root = output_base.resolve() / "prepared_dataset" / f"{config.dataset.name}_{source_root.name}"
+        return prepare_colmap_scene_to_blender(
+            source_root=source_root,
+            prepared_root=prepared_root,
+            holdout_stride=max(2, int(config.extra.get("nerf_llffhold", 8))),
+            include_time_metadata=True,
+        )
+
     def _generate_config_file(
         self,
         config: RunConfig,
         logs_dir: Path,
         iter_params: dict,
+        dataset_root: Path,
         render_only: bool = False,
         render_test: bool = False,
     ) -> Path:
@@ -245,7 +283,6 @@ class NeRFDynamicAdapter:
         Para cenas dinâmicas, usa nerf_type=direct_temporal com
         suporte completo a campos de deformação temporal.
         """
-        dataset_root = Path(config.dataset.root).resolve()
         exp_name = f"{config.run_id}_{self.method_id}"
 
         n_iter = iter_params.get("N_iter", 1000)
@@ -262,7 +299,7 @@ class NeRFDynamicAdapter:
         lines = [
             f"expname = {exp_name}",
             f"basedir = {logs_dir.resolve()}",
-            f"datadir = {dataset_root}",
+            f"datadir = {dataset_root.resolve()}",
             "dataset_type = blender",
             "",
             "nerf_type = direct_temporal",
@@ -334,7 +371,7 @@ class NeRFDynamicAdapter:
             "--config", str(config_file.resolve()),
         ]
 
-    def _build_env(self, config: RunConfig) -> dict[str, str]:
+    def _build_env(self, config: RunConfig, *, dataset_root: Path | None = None) -> dict[str, str]:
         """Monta variáveis de ambiente para o subprocess."""
         env = os.environ.copy()
         
@@ -349,8 +386,9 @@ class NeRFDynamicAdapter:
                 pythonpath = project_root
             env["PYTHONPATH"] = pythonpath
         
+        dataset_root = (dataset_root or Path(config.dataset.root)).resolve()
         env.update({
-            "NVS_DATASET_ROOT": str(Path(config.dataset.root).resolve()),
+            "NVS_DATASET_ROOT": str(dataset_root),
             "NVS_OUTPUT_DIR": str(Path(config.output_dir).resolve()),
             "NVS_RUN_ID": config.run_id,
             "NVS_METHOD_ID": config.method,

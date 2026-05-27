@@ -22,6 +22,7 @@ from nvs_benchmark.core import (
     TrainResult,
 )
 from nvs_benchmark.core.presets import resolve_iterations
+from nvs_benchmark.methods.scene_converters import has_pose_priors, has_real_scene_layout
 
 
 class GSStaticRuntimeError(RuntimeError):
@@ -60,12 +61,21 @@ class GSStaticAdapter:
         """Valida configuração mínima para 3DGS estático."""
         if config.method != self.method_id:
             raise ValueError(f"Metodo incompativel. Esperado '{self.method_id}', recebido '{config.method}'")
-        if config.dataset.name not in {"blender_synthetic", "d_nerf", "custom"}:
+        if config.dataset.name not in {"blender_synthetic", "d_nerf", "custom", "mipnerf360", "tanks_and_temples"}:
             raise ValueError("Dataset nao suportado para GS estatico neste estagio.")
 
         dataset_root = Path(config.dataset.root)
         if not dataset_root.exists():
             raise ValueError(f"Dataset root nao encontrado: {dataset_root}")
+        if config.dataset.name in {"mipnerf360", "tanks_and_temples"}:
+            if not has_real_scene_layout(dataset_root):
+                raise ValueError(
+                    f"{config.dataset.name} requer uma cena extraida com images/, sparse/0, poses_bounds.npy ou imagens diretas."
+                )
+            if not has_pose_priors(dataset_root):
+                raise ValueError(
+                    f"{config.dataset.name} requer poses/cameras em sparse/0 ou transforms_*.json para treino GS estatico."
+                )
 
         repo_path = self._resolve_repo_path(config)
         if not (repo_path / "train.py").exists() or not (repo_path / "render.py").exists():
