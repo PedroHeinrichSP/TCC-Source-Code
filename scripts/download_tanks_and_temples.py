@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import shutil
 import subprocess
 import sys
@@ -29,38 +28,6 @@ def patch_official_downloader(script_path: Path) -> None:
         'with open(fname, encoding="utf-8-sig", errors="replace") as f:',
     )
 
-    image_pattern = re.compile(
-        r"(?ms)        print\('\\nmd5 original:   ' \+ image_md5_dict\[scene\]\)\n"
-        r"        md5_check = h_md5 == image_md5_dict\[scene\]\n\n"
-        r"        if \(md5_check\):"
-    )
-    image_replacement = (
-        "        expected_md5 = image_md5_dict.get(scene)\n"
-        "        if expected_md5 is None:\n"
-        "            print('\\nWarning: MD5 reference missing, extracting without verification.\\n')\n"
-        "        else:\n"
-        "            print('\\nmd5 original:   ' + expected_md5)\n"
-        "            md5_check = h_md5 == expected_md5\n\n"
-        "        if (expected_md5 is None or md5_check):"
-    )
-    patched_source = image_pattern.sub(image_replacement, patched_source, count=1)
-
-    video_pattern = re.compile(
-        r"(?ms)        print\('\\nmd5 original:   ' \+ video_md5_dict\[scene\]\)\n"
-        r"        md5_check = h_md5 == video_md5_dict\[scene\]\n\n"
-        r"        if \(md5_check\):"
-    )
-    video_replacement = (
-        "        expected_md5 = video_md5_dict.get(scene)\n"
-        "        if expected_md5 is None:\n"
-        "            print('\\nWarning: MD5 reference missing, extracting without verification.\\n')\n"
-        "        else:\n"
-        "            print('\\nmd5 original:   ' + expected_md5)\n"
-        "            md5_check = h_md5 == expected_md5\n\n"
-        "        if (expected_md5 is None or md5_check):"
-    )
-    patched_source = video_pattern.sub(video_replacement, patched_source, count=1)
-
     if patched_source != source:
         script_path.write_text(patched_source, encoding="utf-8")
 
@@ -86,10 +53,11 @@ def extract_downloaded_archives(target_path: Path, modality: str) -> None:
     if modality in {"video", "both"}:
         roots.append(target_path / "videos")
 
+    invalid_archives: list[str] = []
     for root in roots:
         if not root.exists() or not root.is_dir():
             continue
-        for zip_file in root.glob("*.zip"):
+        for zip_file in sorted(root.glob("*.zip")):
             scene_name = zip_file.stem
             extract_dir = root / scene_name
             if extract_dir.exists():
@@ -99,16 +67,28 @@ def extract_downloaded_archives(target_path: Path, modality: str) -> None:
                 with zipfile.ZipFile(zip_file, "r") as zip_ref:
                     zip_ref.extractall(extract_dir)
             except zipfile.BadZipFile as exc:
+                shutil.rmtree(extract_dir, ignore_errors=True)
                 try:
                     zip_file.unlink(missing_ok=True)
                 except TypeError:
                     if zip_file.exists():
                         zip_file.unlink()
-                raise RuntimeError(
-                    f"Arquivo invalido baixado para {scene_name}: {zip_file}. "
-                    "O downloader oficial retornou HTML/login page em vez do ZIP real. "
-                    "Neste ambiente, o Tanks and Temples precisa de download manual/autenticado."
-                ) from exc
+                invalid_archives.append(str(zip_file))
+                continue
+
+            try:
+                zip_file.unlink(missing_ok=True)
+            except TypeError:
+                if zip_file.exists():
+                    zip_file.unlink()
+
+    if invalid_archives:
+        invalid_list = ", ".join(invalid_archives)
+        raise RuntimeError(
+            "Alguns arquivos ZIP baixados para Tanks and Temples eram invalidos e foram removidos: "
+            f"{invalid_list}. O downloader oficial retornou HTML/login page em vez do ZIP real. "
+            "Neste ambiente, o Tanks and Temples precisa de download manual/autenticado."
+        )
 
 
 def main() -> int:
@@ -150,8 +130,7 @@ def main() -> int:
     print(f"[info] comando: {' '.join(command)}")
 
     completed = subprocess.run(command, check=False)
-    if completed.returncode == 0:
-        extract_downloaded_archives(target_path, args.modality)
+    extract_downloaded_archives(target_path, args.modality)
     return completed.returncode
 
 

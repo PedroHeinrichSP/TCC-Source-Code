@@ -83,7 +83,27 @@ def load_install_catalog(catalog_file: str | Path) -> InstallCatalog:
     return InstallCatalog(datasets=datasets, methods=methods, notes=notes)
 
 
-def _is_installed(path_value: str) -> bool:
+def _tanks_and_temples_has_scene_content(path: Path) -> bool:
+    """Detecta se Tanks and Temples tem ao menos uma cena extraida com imagens."""
+    roots = [path / "image_sets", path / "videos"]
+    image_suffixes = (".png", ".jpg", ".jpeg", ".webp", ".PNG", ".JPG", ".JPEG", ".WEBP")
+
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for scene_dir in root.iterdir():
+            if not scene_dir.is_dir():
+                continue
+            try:
+                if any(candidate.is_file() and candidate.suffix in image_suffixes for candidate in scene_dir.rglob("*")):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _is_installed(item: InstallItem) -> bool:
+    path_value = item.path
     if not path_value:
         return False
     path = Path(path_value)
@@ -92,6 +112,8 @@ def _is_installed(path_value: str) -> bool:
     if path.is_file():
         return True
     if path.is_dir():
+        if item.item_id == "tanks_and_temples":
+            return _tanks_and_temples_has_scene_content(path)
         try:
             return any(path.iterdir())
         except OSError:
@@ -211,7 +233,7 @@ def install_items(
         targets.extend(catalog.methods)
 
     for item in targets:
-        if _is_installed(item.path):
+        if _is_installed(item):
             messages.append(f"[skip] {item.label}: already exists at {item.path}")
             continue
         command = _suggest_command(item)

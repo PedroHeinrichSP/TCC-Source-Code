@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from nvs_benchmark.cli import run_methods_check, run_metrics_check
+from nvs_benchmark.cli import run_install, run_methods_check, run_metrics_check
 from nvs_benchmark.core import DatasetSpec, InferenceResult, TrainResult
 from nvs_benchmark.evaluation import BenchmarkMetrics
 from nvs_benchmark.methods.gs_static.adapter import GSStaticHardwareError
@@ -116,3 +116,14 @@ def test_metrics_check_skips_gs_static_without_cuda(monkeypatch, capsys):
     assert "[gs_static] skipped:" in captured
     assert len(saved["metrics"]) == 1
     assert saved["metrics"][0].method == "nerf_static"
+
+
+def test_run_install_reports_missing_catalog(tmp_path, capsys):
+    missing_catalog = tmp_path / "missing_catalog.json"
+
+    exit_code = run_install(str(missing_catalog), only="datasets", execute=False)
+    captured = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Catalog not found:" in captured
+    assert "Nenhum item encontrado para instalacao" in captured

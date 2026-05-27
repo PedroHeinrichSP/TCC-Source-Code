@@ -17,6 +17,9 @@ from nvs_benchmark.data.validation import validate_dataset_integrity
 from nvs_benchmark.runtime import detect_hardware_snapshot
 
 
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".PNG", ".JPG", ".JPEG", ".WEBP")
+
+
 @dataclass
 class ValidationResult:
     """Resultado de uma validação."""
@@ -105,6 +108,66 @@ def validate_matrix_completeness(
     )
 
 
+def _collect_image_files(root_path: Path) -> list[Path]:
+    try:
+        image_files = [
+            candidate
+            for candidate in root_path.rglob("*")
+            if candidate.is_file() and candidate.suffix in _IMAGE_SUFFIXES
+        ]
+    except OSError:
+        return []
+    return sorted(image_files, key=lambda candidate: (len(candidate.parts), str(candidate).lower()))
+
+
+def _validate_direct_image_dataset_integrity(
+    root: str | Path,
+    *,
+    full_scan: bool = False,
+    sample_size: int = 16,
+) -> ValidationResult:
+    root_path = Path(root)
+    image_files = _collect_image_files(root_path)
+    if not image_files:
+        return ValidationResult(
+            is_valid=False,
+            message=f"Dataset sem imagens validas em {root}",
+            details={"expected_path": str(root_path.absolute())},
+        )
+
+    checked_files = image_files if full_scan else image_files[: max(sample_size, 1)]
+    corrupted_images = [
+        str(candidate.relative_to(root_path))
+        for candidate in checked_files
+        if candidate.stat().st_size <= 0
+    ]
+
+    details = {
+        "checked_frames": len(checked_files),
+        "total_frames": len(image_files),
+        "warnings": [],
+        "errors": [],
+        "missing_images": [],
+        "corrupted_images": corrupted_images,
+    }
+    if corrupted_images:
+        details["errors"] = [f"{len(corrupted_images)} imagem(ns) corrompida(s) detectada(s)"]
+        return ValidationResult(
+            is_valid=False,
+            message="Falha na validacao de integridade do dataset",
+            details=details,
+        )
+
+    return ValidationResult(
+        is_valid=True,
+        message=(
+            f"Integridade do dataset valida (imagens verificadas: "
+            f"{len(checked_files)}/{len(image_files)})"
+        ),
+        details=details,
+    )
+
+
 def validate_dataset_path(dataset_name: str, root: str) -> ValidationResult:
     """Valida se um caminho de dataset existe e contém arquivos esperados."""
     root_path = Path(root)
@@ -139,6 +202,20 @@ def validate_dataset_path(dataset_name: str, root: str) -> ValidationResult:
                     "missing_files": missing_files,
                 }
             )
+
+    if dataset_name in {"mipnerf360", "tanks_and_temples"}:
+        has_image_files = bool(_collect_image_files(root_path))
+        has_sparse = (root_path / "sparse" / "0").exists() and (root_path / "sparse" / "0").is_dir()
+        has_numpy = (root_path / "poses_bounds.npy").exists()
+
+        if not has_image_files and not has_sparse and not has_numpy:
+            return ValidationResult(
+                is_valid=False,
+                message=(
+                    f"Dataset {dataset_name} incompleto em {root}: esperado imagens validas, sparse/0 "
+                    "ou poses_bounds.npy na base."
+                ),
+            )
     
     return ValidationResult(
         is_valid=True,
@@ -159,6 +236,15 @@ def validate_dataset_integrity_preflight(
     path_result = validate_dataset_path(dataset_name, root)
     if not path_result.is_valid:
         return path_result
+
+    root_path = Path(root)
+    transforms_path = root_path / f"transforms_{split}.json"
+    if dataset_name in {"mipnerf360", "tanks_and_temples"} and not transforms_path.exists():
+        return _validate_direct_image_dataset_integrity(
+            root_path,
+            full_scan=full_scan,
+            sample_size=sample_size,
+        )
 
     report = validate_dataset_integrity(
         root=root,

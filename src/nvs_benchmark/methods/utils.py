@@ -105,7 +105,14 @@ def _candidate_reference_images(root_path: Path) -> list[Path]:
     """Coleta imagens candidatas diretamente na cena ou no diretório images/."""
     patterns = ("*.png", "*.jpg", "*.jpeg", "*.JPG", "*.PNG")
     candidates: list[Path] = []
-    for folder in (root_path, root_path / "images", root_path / "image"):
+    for folder in (
+        root_path,
+        root_path / "images",
+        root_path / "images_2",
+        root_path / "images_4",
+        root_path / "images_8",
+        root_path / "image",
+    ):
         if not folder.exists() or not folder.is_dir():
             continue
         for pattern in patterns:

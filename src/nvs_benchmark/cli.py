@@ -1201,10 +1201,18 @@ def run_method_run(
 def run_install(catalog_file: str, only: str, execute: bool) -> int:
     """Instala datasets/modelos a partir do catalogo."""
     catalog = load_install_catalog(catalog_file)
+    fatal_catalog_problem = any(
+        note.startswith("Catalog not found:") or note.startswith("Invalid catalog JSON:")
+        for note in catalog.notes
+    )
+    for note in catalog.notes:
+        print(f"[note] {note}")
     messages = install_items(catalog=catalog, only=only, execute=execute)
+    if not messages:
+        print(f"[info] Nenhum item encontrado para instalacao com --only {only}.")
     for line in messages:
         print(line)
-    return 0
+    return 1 if fatal_catalog_problem else 0
 
 
 def _metric_from_snapshot_entry(method: str, payload: dict) -> BenchmarkMetrics:
