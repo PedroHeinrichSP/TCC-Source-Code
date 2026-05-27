@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass
 
 from nvs_benchmark.data.validation import validate_dataset_integrity
+from nvs_benchmark.data.registry import _is_tanks_and_temples_scene_root
 from nvs_benchmark.runtime import detect_hardware_snapshot
 
 
@@ -203,7 +204,7 @@ def validate_dataset_path(dataset_name: str, root: str) -> ValidationResult:
                 }
             )
 
-    if dataset_name in {"mipnerf360", "tanks_and_temples"}:
+    if dataset_name == "mipnerf360":
         has_image_files = bool(_collect_image_files(root_path))
         has_sparse = (root_path / "sparse" / "0").exists() and (root_path / "sparse" / "0").is_dir()
         has_numpy = (root_path / "poses_bounds.npy").exists()
@@ -214,6 +215,16 @@ def validate_dataset_path(dataset_name: str, root: str) -> ValidationResult:
                 message=(
                     f"Dataset {dataset_name} incompleto em {root}: esperado imagens validas, sparse/0 "
                     "ou poses_bounds.npy na base."
+                ),
+            )
+
+    if dataset_name == "tanks_and_temples":
+        if not _is_tanks_and_temples_scene_root(root_path):
+            return ValidationResult(
+                is_valid=False,
+                message=(
+                    f"Dataset {dataset_name} invalido em {root}: use uma cena extraida em image_sets/<cena> "
+                    "ou videos/<cena> com imagens, images/, poses_bounds.npy ou transforms_*.json."
                 ),
             )
     

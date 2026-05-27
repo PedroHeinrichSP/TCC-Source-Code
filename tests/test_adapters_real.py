@@ -1,7 +1,10 @@
 """Testes de validacao dos adapters real (NeRF estatico e D-NeRF dinamico)."""
 
+import json
 from pathlib import Path
 
+import imageio.v2 as imageio
+import numpy as np
 import pytest
 
 from nvs_benchmark.core import (
@@ -80,6 +83,112 @@ class TestAdapterValidation:
         )
         with pytest.raises(ValueError, match="Dataset root nao encontrado"):
             adapter.validate_config(config)
+
+    def test_nerf_static_prepares_mipnerf360_scene(self, tmp_path):
+        """Mip-NeRF 360 static scene should be converted to a Blender-style root."""
+        adapter = NeRFStaticAdapter()
+        scene_root = tmp_path / "mipnerf360" / "garden"
+        images_dir = scene_root / "images"
+        sparse_dir = scene_root / "sparse" / "0"
+        images_dir.mkdir(parents=True)
+        sparse_dir.mkdir(parents=True)
+
+        imageio.imwrite(images_dir / "frame_0001.png", np.array([[[255, 0, 0, 255]]], dtype=np.uint8))
+        imageio.imwrite(images_dir / "frame_0002.png", np.array([[[0, 255, 0, 255]]], dtype=np.uint8))
+
+        (sparse_dir / "cameras.txt").write_text(
+            "# Camera list\n"
+            "1 PINHOLE 1 1 1 1 0.5 0.5\n",
+            encoding="utf-8",
+        )
+        (sparse_dir / "images.txt").write_text(
+            "# Image list\n"
+            "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+            "0 0 -1\n"
+            "2 1 0 0 0 0 0 0 1 frame_0002.png\n"
+            "0 0 -1\n",
+            encoding="utf-8",
+        )
+
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="mipnerf360", root=str(scene_root)),
+            method="nerf_static",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+        )
+        output_base = Path(config.output_dir) / config.run_id / adapter.method_id
+
+        prepared_root = adapter._resolve_dataset_root(config, output_base)
+
+        assert prepared_root != scene_root
+        assert (prepared_root / "transforms_train.json").exists()
+        assert (prepared_root / "transforms_test.json").exists()
+        assert (prepared_root / "images" / "frame_0001.png").exists()
+        assert (prepared_root / "images" / "frame_0002.png").exists()
+
+        train_payload = json.loads((prepared_root / "transforms_train.json").read_text(encoding="utf-8"))
+        test_payload = json.loads((prepared_root / "transforms_test.json").read_text(encoding="utf-8"))
+
+        assert train_payload["camera_angle_x"] > 0
+        assert len(train_payload["frames"]) == 1
+        assert len(test_payload["frames"]) == 1
+        assert imageio.imread(prepared_root / "images" / "frame_0001.png").shape[-1] == 4
+
+    def test_nerf_static_train_uses_prepared_mipnerf360_root(self, tmp_path, monkeypatch):
+        """Training should pass the converted Mip-NeRF 360 root to the backend."""
+        adapter = NeRFStaticAdapter()
+        scene_root = tmp_path / "mipnerf360" / "garden"
+        images_dir = scene_root / "images"
+        sparse_dir = scene_root / "sparse" / "0"
+        images_dir.mkdir(parents=True)
+        sparse_dir.mkdir(parents=True)
+
+        imageio.imwrite(images_dir / "frame_0001.png", np.array([[[255, 0, 0, 255]]], dtype=np.uint8))
+        imageio.imwrite(images_dir / "frame_0002.png", np.array([[[0, 255, 0, 255]]], dtype=np.uint8))
+
+        (sparse_dir / "cameras.txt").write_text(
+            "# Camera list\n"
+            "1 PINHOLE 1 1 1 1 0.5 0.5\n",
+            encoding="utf-8",
+        )
+        (sparse_dir / "images.txt").write_text(
+            "# Image list\n"
+            "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+            "0 0 -1\n"
+            "2 1 0 0 0 0 0 0 1 frame_0002.png\n"
+            "0 0 -1\n",
+            encoding="utf-8",
+        )
+
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="mipnerf360", root=str(scene_root)),
+            method="nerf_static",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "smoke"},
+        )
+
+        captured: dict[str, object] = {}
+
+        def fake_run_command(*, command, cwd, env, stage):
+            captured.update({"command": command, "cwd": cwd, "env": env, "stage": stage})
+
+        monkeypatch.setattr(adapter, "_run_command", fake_run_command)
+        monkeypatch.setattr(adapter, "_find_latest_checkpoint", lambda logs_dir: logs_dir / "checkpoint.tar")
+
+        result = adapter.train(TrainRequest(config=config))
+
+        config_path = Path(result.output_dir) / "logs" / "config_nerf_static.txt"
+        config_text = config_path.read_text(encoding="utf-8")
+
+        assert captured["stage"] == "train"
+        assert "prepared_dataset" in str(captured["env"]["NVS_DATASET_ROOT"])
+        assert f"datadir = {captured['env']['NVS_DATASET_ROOT']}" in config_text
+        assert result.checkpoint_path.endswith("checkpoint.tar")
 
 
     def test_gs_static_validate_config_requires_cuda(self, tmp_path, monkeypatch):

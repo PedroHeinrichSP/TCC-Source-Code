@@ -414,6 +414,62 @@ save_state(resolved_dataset_root)
 
 
 # ---- cell ----
+# Defaults de selecao do notebook
+# Mantem um padrao unico e permite override via variaveis de ambiente.
+DEFAULT_SELECTION = {
+    "SELECTED_METHOD": "nerf_static",
+    "SELECTED_DATASET": "blender_synthetic",
+    "SELECTED_PRESET": "quick",
+    "RUN_MODE": "full",
+    "STRICT_RESULTS": True,
+    "GENERATE_PDF": False,
+    "MIN_REQUIRED_PAIRS": 1,
+    "LOAD_SAVED_SELECTION": False,
+    "ENABLE_NERF_MEMORY_TUNING": True,
+    "FALLBACK_TO_SMOKE_ON_OOM": True,
+    "SELECTED_SCENE_NAME": "garden",
+    "SELECTED_TT_SCENE_NAME": "Family",
+}
+
+
+def _resolve_default(name: str, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    if isinstance(default, bool):
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(default, int):
+        try:
+            return int(raw_value)
+        except ValueError:
+            return default
+    return raw_value
+
+
+SELECTED_METHOD = _resolve_default("NVS_SELECTED_METHOD", DEFAULT_SELECTION["SELECTED_METHOD"])
+SELECTED_DATASET = _resolve_default("NVS_SELECTED_DATASET", DEFAULT_SELECTION["SELECTED_DATASET"])
+SELECTED_PRESET = _resolve_default("NVS_SELECTED_PRESET", DEFAULT_SELECTION["SELECTED_PRESET"])
+RUN_MODE = _resolve_default("NVS_RUN_MODE", DEFAULT_SELECTION["RUN_MODE"])
+STRICT_RESULTS = _resolve_default("NVS_STRICT_RESULTS", DEFAULT_SELECTION["STRICT_RESULTS"])
+GENERATE_PDF = _resolve_default("NVS_GENERATE_PDF", DEFAULT_SELECTION["GENERATE_PDF"])
+MIN_REQUIRED_PAIRS = _resolve_default("NVS_MIN_REQUIRED_PAIRS", DEFAULT_SELECTION["MIN_REQUIRED_PAIRS"])
+LOAD_SAVED_SELECTION = _resolve_default("NVS_LOAD_SAVED_SELECTION", DEFAULT_SELECTION["LOAD_SAVED_SELECTION"])
+ENABLE_NERF_MEMORY_TUNING = _resolve_default(
+    "NVS_ENABLE_NERF_MEMORY_TUNING",
+    DEFAULT_SELECTION["ENABLE_NERF_MEMORY_TUNING"],
+)
+FALLBACK_TO_SMOKE_ON_OOM = _resolve_default(
+    "NVS_FALLBACK_TO_SMOKE_ON_OOM",
+    DEFAULT_SELECTION["FALLBACK_TO_SMOKE_ON_OOM"],
+)
+SELECTED_SCENE_NAME = _resolve_default("NVS_SELECTED_SCENE_NAME", DEFAULT_SELECTION["SELECTED_SCENE_NAME"])
+SELECTED_TT_SCENE_NAME = _resolve_default(
+    "NVS_SELECTED_TT_SCENE_NAME",
+    DEFAULT_SELECTION["SELECTED_TT_SCENE_NAME"],
+)
+
+
+# ---- cell ----
 import os
 from pathlib import Path
 
@@ -546,6 +602,84 @@ def resolve_saved_scene_root(dataset_id: str, root_value: str) -> str:
         return ""
     return str(root_path)
 
+
+# ---- cell ----
+def _is_tanks_and_temples_scene_root(candidate: Path) -> bool:
+    if not candidate.exists() or not candidate.is_dir():
+        return False
+    ancestor_names = {parent.name.lower() for parent in candidate.parents}
+    if not ancestor_names.intersection({"image_sets", "videos"}):
+        return False
+    has_direct_images = any(
+        file_candidate.is_file() and file_candidate.suffix.lower() in {suffix.lower() for suffix in _IMAGE_SUFFIXES}
+        for file_candidate in candidate.rglob("*")
+    )
+    return (
+        _existing_splits(candidate)
+        or (candidate / "images").exists()
+        or (candidate / "poses_bounds.npy").exists()
+        or has_direct_images
+    )
+
+
+
+def discover_dataset_candidates(search_roots: list[Path], dataset_id: str) -> list[Path]:
+    if dataset_id == "tanks_and_temples":
+        candidates: list[Path] = []
+        for base in search_roots:
+            base = Path(base).expanduser().resolve()
+            if not base.exists():
+                continue
+            if _is_tanks_and_temples_scene_root(base):
+                candidates.append(base)
+            for marker in ("image_sets", "videos"):
+                for candidate in base.glob(f"**/{marker}/*"):
+                    if candidate.is_dir() and _is_tanks_and_temples_scene_root(candidate):
+                        candidates.append(candidate.resolve())
+        unique_candidates = sorted(
+            {candidate for candidate in candidates},
+            key=lambda candidate: (len(candidate.parts), str(candidate).lower()),
+        )
+        return unique_candidates
+
+    markers_by_dataset = {
+        "blender_synthetic": ("transforms_train.json",),
+        "d_nerf": ("transforms_train.json",),
+        "mipnerf360": ("transforms_train.json", "poses_bounds.npy", "sparse/0"),
+    }
+    markers = markers_by_dataset.get(dataset_id, ("transforms_train.json", "poses_bounds.npy", "images", "sparse/0"))
+    candidates: list[Path] = []
+    for base in search_roots:
+        base = Path(base).expanduser().resolve()
+        if not base.exists():
+            continue
+        for marker in markers:
+            candidates.extend(_search_candidates_for_marker(base, marker))
+    unique_candidates = sorted(
+        {candidate for candidate in candidates},
+        key=lambda candidate: (len(candidate.parts), str(candidate).lower()),
+    )
+    return unique_candidates
+
+
+
+def resolve_saved_scene_root(dataset_id: str, root_value: str) -> str:
+    root_path = Path(root_value).expanduser().resolve()
+    if dataset_id == "tanks_and_temples":
+        if _is_tanks_and_temples_scene_root(root_path):
+            return str(root_path)
+        search_roots = [root_path, root_path / "image_sets", root_path / "videos"]
+        candidates = discover_dataset_candidates(search_roots, dataset_id)
+        if candidates:
+            return str(normalize_dataset_path(choose_preferred_candidate(dataset_id, candidates)))
+        return ""
+    if _path_has_dataset_markers(root_path):
+        return str(root_path)
+    search_roots = [root_path]
+    candidates = discover_dataset_candidates(search_roots, dataset_id)
+    if candidates:
+        return str(normalize_dataset_path(choose_preferred_candidate(dataset_id, candidates)))
+    return str(root_path)
 
 # ---- cell ----
 # Setup do ambiente local

@@ -30,6 +30,23 @@ def _has_direct_image_files(root: Path) -> bool:
     return any(next(root.glob(pattern), None) is not None for pattern in patterns)
 
 
+def _is_tanks_and_temples_scene_root(root: Path) -> bool:
+    """Verifica se a raiz pertence a uma cena extraída do Tanks and Temples."""
+    if not root.exists() or not root.is_dir():
+        return False
+
+    ancestor_names = {parent.name.lower() for parent in root.parents}
+    if not ancestor_names.intersection({"image_sets", "videos"}):
+        return False
+
+    if _existing_splits(root):
+        return True
+
+    images_dir = root / "images"
+    poses_bounds = root / "poses_bounds.npy"
+    return images_dir.exists() or poses_bounds.exists() or _has_direct_image_files(root)
+
+
 def _existing_splits(root: Path) -> list[str]:
     """Lista splits disponíveis com base em arquivos transforms_<split>.json."""
     splits: list[str] = []
@@ -215,15 +232,11 @@ class TanksAndTemplesLoader:
         if not root_path.exists() or not root_path.is_dir():
             raise DatasetValidationError(f"Diretorio invalido para dataset: {root_path}")
 
-        splits = _existing_splits(root_path)
-        if not splits:
-            # Aceitar estrutura com poses_bounds.npy (LLFF) ou diretório images/
-            images_dir = root_path / "images"
-            poses_bounds = root_path / "poses_bounds.npy"
-            if not images_dir.exists() and not poses_bounds.exists() and not _has_direct_image_files(root_path):
-                raise DatasetValidationError(
-                    "Tanks and Temples requer transforms_*.json, images/, poses_bounds.npy ou imagens diretamente na cena."
-                )
+        if not _is_tanks_and_temples_scene_root(root_path):
+            raise DatasetValidationError(
+                "Tanks and Temples requer uma cena extraida em image_sets/<cena> ou videos/<cena> "
+                "com imagens, images/, poses_bounds.npy ou transforms_*.json."
+            )
 
     def load(self, root: str | Path, split: str = "train") -> DatasetSpec:
         """Carrega metadados do split solicitado para Tanks and Temples."""
