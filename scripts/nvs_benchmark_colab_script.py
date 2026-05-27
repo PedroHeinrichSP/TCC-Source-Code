@@ -39,7 +39,7 @@ SKIP_TRAINING = False
 LOCAL_ARTIFACTS_ZIP = ""  # Ex.: r"C:\\Users\\voce\\Downloads\\artifacts.zip"
 SELECTED_DATASET_ROOT = ""  # Ex.: r"D:\\datasets\\blender_synthetic\\nerf_synthetic\\lego"
 SELECTED_SCENE_NAME = "garden"  # Cena padrao para datasets multi-cena como mipnerf360
-SELECTED_TT_SCENE_NAME = "Family"  # Cena padrao para Tanks and Temples
+SELECTED_TT_SCENE_NAME = "train"  # Cena padrao para Tanks and Temples
 EXTRA_JSON = ""  # JSON inline opcional para --extra-json
 USE_LOCAL_BACKUP = False
 BACKUP_DATASETS = False
@@ -300,6 +300,17 @@ def write_single_dataset_catalog(dataset_id: str) -> Path:
     datasets = [item for item in catalog_payload.get("datasets", []) if item.get("id") == dataset_id]
     if not datasets:
         raise RuntimeError(f"Dataset {dataset_id} nao encontrado em {CATALOG_FILE}")
+    if dataset_id == "tanks_and_temples":
+        selected_scene = SELECTED_TT_SCENE_NAME.strip().lower()
+        if selected_scene:
+            dataset_item = dict(datasets[0])
+            dataset_item["command"] = (
+                "python ./scripts/download_tanks_and_temples.py "
+                "--pathname ./data/tanks_and_temples "
+                "--source inria "
+                f"--scene {selected_scene}"
+            )
+            datasets = [dataset_item]
     TEMP_CATALOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     filtered = {
         "datasets": datasets,

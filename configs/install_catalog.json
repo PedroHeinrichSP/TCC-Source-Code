@@ -41,11 +41,11 @@
       "label": "Tanks and Temples (grande escala)",
       "description": "Cenas de grande escala com groundtruth 3D (truck, train, playground, etc). Referencia para avaliacao de reconstrucao.",
       "path": "./data/tanks_and_temples",
-      "url": "https://www.tanksandtemples.org/download/",
-      "command": "python ./scripts/download_tanks_and_temples.py --pathname ./data/tanks_and_temples --group all --modality image",
+      "url": "https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip",
+      "command": "python ./scripts/download_tanks_and_temples.py --pathname ./data/tanks_and_temples --source inria --scene train",
       "size_mb": 15000,
       "format": "tanks_and_temples",
-      "license": "Research only — requer registro",
+      "license": "Research only",
       "paper": "Tanks and Temples: Benchmarking Large-Scale Scene Reconstruction (Knapitsch et al., 2017)"
     }
   ],

@@ -183,10 +183,12 @@ class TestAdapterValidation:
         assert (prepared_root / "images" / "frame_0002.png").exists()
 
         train_payload = json.loads((prepared_root / "transforms_train.json").read_text(encoding="utf-8"))
+        val_payload = json.loads((prepared_root / "transforms_val.json").read_text(encoding="utf-8"))
         test_payload = json.loads((prepared_root / "transforms_test.json").read_text(encoding="utf-8"))
 
         assert train_payload["camera_angle_x"] > 0
         assert len(train_payload["frames"]) == 1
+        assert len(val_payload["frames"]) >= 1
         assert len(test_payload["frames"]) == 1
         assert imageio.imread(prepared_root / "images" / "frame_0001.png").shape[-1] == 4
 

@@ -12,6 +12,7 @@ import imageio.v2 as imageio
 import numpy as np
 
 REQUIRED_BLENDER_SPLITS = ("transforms_train.json", "transforms_val.json", "transforms_test.json")
+CONVERSION_LAYOUT_VERSION = 2
 
 
 def find_images(directory: Path) -> list[Path]:
@@ -192,6 +193,7 @@ def prepare_colmap_scene_to_blender(
     """Converte uma cena COLMAP para o layout Blender esperado pelos backends NeRF."""
     meta_path = prepared_root / "conversion_meta.json"
     expected_meta = {
+        "conversion_layout_version": CONVERSION_LAYOUT_VERSION,
         "source_root": str(source_root.resolve()),
         "holdout_stride": int(holdout_stride),
         "include_time_metadata": bool(include_time_metadata),
@@ -299,13 +301,19 @@ def prepare_colmap_scene_to_blender(
     if not test_frames and train_frames:
         test_frames.append(train_frames[-1])
 
+    val_frames = list(test_frames or train_frames[:1])
+    if not val_frames and train_frames:
+        val_frames = [train_frames[0]]
+    elif not val_frames and test_frames:
+        val_frames = [test_frames[0]]
+
     payload_base = {"camera_angle_x": camera_angle_x or 0.0}
     (prepared_root / "transforms_train.json").write_text(
         json.dumps({**payload_base, "frames": train_frames}, indent=2),
         encoding="utf-8",
     )
     (prepared_root / "transforms_val.json").write_text(
-        json.dumps({**payload_base, "frames": []}, indent=2),
+        json.dumps({**payload_base, "frames": val_frames}, indent=2),
         encoding="utf-8",
     )
     (prepared_root / "transforms_test.json").write_text(
