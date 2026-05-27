@@ -1,50 +1,101 @@
-﻿{
+{
   "datasets": [
     {
       "id": "blender_synthetic",
-      "label": "Blender Synthetic",
+      "label": "Blender Synthetic (NeRF)",
+      "description": "Dataset NeRF Blender com 8 cenas sinteticas (lego, hotdog, chair, etc). Usado em NeRF e D-NeRF.",
       "path": "./data/blender_synthetic/nerf_synthetic/lego",
       "url": "https://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_example_data.zip",
       "command": "powershell -NoProfile -Command \"$ProgressPreference='SilentlyContinue'; $out='nerf_example_data.zip'; Invoke-WebRequest -Uri 'https://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_example_data.zip' -OutFile $out -UseBasicParsing; Expand-Archive -Force $out './data/blender_synthetic'; Remove-Item $out\"",
-      "size_mb": 1700
+      "size_mb": 1700,
+      "format": "blender_synthetic",
+      "license": "CC BY 4.0",
+      "paper": "NeRF: Representing Scenes as Neural Radiance Fields (Mildenhall et al., 2020)"
+    },
+    {
+      "id": "d_nerf",
+      "label": "D-NeRF Dynamic Dataset",
+      "description": "Dataset de cenas dinamicas com metadados temporais. Usado em D-NeRF e metodos dinamicos.",
+      "path": "./data/d_nerf/lego",
+      "url": "https://github.com/albertpumarola/D-NeRF",
+      "command": "powershell -NoProfile -Command \"Write-Host 'D-NeRF dataset: baixe manualmente em https://www.albertpumarola.com/research/D-NeRF/index.html e extraia em ./data/d_nerf'\"",
+      "size_mb": 700,
+      "format": "d_nerf",
+      "license": "Research only",
+      "paper": "D-NeRF: Neural Radiance Fields for Dynamic Scenes (Pumarola et al., 2021)"
+    },
+    {
+      "id": "mipnerf360",
+      "label": "Mip-NeRF 360 (cenas reais unbounded)",
+      "description": "Cenas de escala real 360 graus (garden, room, counter, kitchen, bonsai, bicycle, stump). Alta qualidade para benchmarks avancados.",
+      "path": "./data/mipnerf360",
+      "url": "https://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
+      "command": "python ./scripts/download_mipnerf360.py --pathname ./data/mipnerf360",
+      "size_mb": 7700,
+      "format": "mipnerf360",
+      "license": "CC BY 4.0",
+      "paper": "Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields (Barron et al., 2022)"
+    },
+    {
+      "id": "tanks_and_temples",
+      "label": "Tanks and Temples (grande escala)",
+      "description": "Cenas de grande escala com groundtruth 3D (truck, train, playground, etc). Referencia para avaliacao de reconstrucao.",
+      "path": "./data/tanks_and_temples",
+      "url": "https://www.tanksandtemples.org/download/",
+      "command": "python ./scripts/download_tanks_and_temples.py --pathname ./data/tanks_and_temples --group all --modality image",
+      "size_mb": 15000,
+      "format": "tanks_and_temples",
+      "license": "Research only — requer registro",
+      "paper": "Tanks and Temples: Benchmarking Large-Scale Scene Reconstruction (Knapitsch et al., 2017)"
     }
   ],
   "methods": [
     {
       "id": "nerf_static",
       "label": "NeRF Static (bmild/nerf)",
+      "description": "Implementacao original do NeRF em TensorFlow. Referencia classica para cenas estaticas.",
       "path": "./third_party/nerf",
       "url": "https://github.com/bmild/nerf",
       "command": "git clone https://github.com/bmild/nerf ./third_party/nerf",
-      "size_mb": null
+      "size_mb": null,
+      "paper": "NeRF: Representing Scenes as Neural Radiance Fields (Mildenhall et al., 2020)"
     },
     {
       "id": "nerf_dynamic",
       "label": "D-NeRF (albertpumarola/D-NeRF)",
+      "description": "D-NeRF para cenas dinamicas com campo de deformacao temporal em PyTorch.",
       "path": "./third_party/d_nerf",
       "url": "https://github.com/albertpumarola/D-NeRF",
       "command": "git clone https://github.com/albertpumarola/D-NeRF ./third_party/d_nerf",
-      "size_mb": null
+      "size_mb": null,
+      "paper": "D-NeRF: Neural Radiance Fields for Dynamic Scenes (Pumarola et al., 2021)"
     },
     {
       "id": "gs_static",
       "label": "3D Gaussian Splatting",
+      "description": "Renderizacao em tempo real por splatting de gaussianas 3D. Muito mais rapido que NeRF.",
       "path": "./third_party/gaussian_splatting",
       "url": "https://github.com/graphdeco-inria/gaussian-splatting",
       "command": "git clone https://github.com/graphdeco-inria/gaussian-splatting ./third_party/gaussian_splatting",
-      "size_mb": null
+      "size_mb": null,
+      "paper": "3D Gaussian Splatting for Real-Time Radiance Field Rendering (Kerbl et al., 2023)"
     },
     {
       "id": "gs_dynamic",
       "label": "4D Gaussian Splatting",
+      "description": "Extensao do 3DGS para cenas dinamicas usando gaussianas 4D (espaco-tempo).",
       "path": "./third_party/4d_gaussians",
       "url": "https://github.com/hustvl/4DGaussians",
-      "command": "git clone https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
-      "size_mb": null
+      "command": "git clone --recursive https://github.com/hustvl/4DGaussians ./third_party/4d_gaussians",
+      "size_mb": null,
+      "paper": "4D Gaussian Splatting for Real-Time Dynamic Scene Rendering (Wu et al., 2024)"
     }
   ],
   "notes": [
-    "Catalogo preparado para download.",
-    "Para Linux/Mac, substitua o comando PowerShell por curl/unzip equivalente."
+    "Catalogo preparado para download automatico e manual.",
+    "Para Linux/Mac, substitua os comandos PowerShell por: curl -L <url> -o arquivo.zip && unzip arquivo.zip",
+    "Mip-NeRF 360 e Tanks&Temples sao datasets grandes (7-15 GB). Com GPU A100 ou RTX 3090, resultados sao melhores.",
+    "D-NeRF e Tanks&Temples requerem registro/download manual nas paginas oficiais.",
+    "Use 'nvs-benchmark install --only datasets' para instalar todos os datasets configurados."
   ]
 }

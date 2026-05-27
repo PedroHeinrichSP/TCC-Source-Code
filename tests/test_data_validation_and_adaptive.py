@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from nvs_benchmark.cli_extensions import estimate_execution_time
+from nvs_benchmark.cli_extensions import estimate_execution_time, validate_dataset_integrity_preflight, validate_dataset_path
 from nvs_benchmark.core import HardwareProfile
 from nvs_benchmark.core.presets import resolve_iterations
 from nvs_benchmark.data.validation import validate_dataset_integrity
@@ -66,6 +66,34 @@ def test_validate_dataset_integrity_detects_missing_and_corrupt(tmp_path: Path) 
     assert not report.is_valid
     assert len(report.missing_images) == 1
     assert len(report.corrupted_images) == 1
+
+
+def test_tanks_and_temples_validation_rejects_mipnerf360_root(tmp_path: Path) -> None:
+    root = tmp_path / "mipnerf360" / "garden"
+    (root / "images").mkdir(parents=True, exist_ok=True)
+    (root / "sparse" / "0").mkdir(parents=True, exist_ok=True)
+    _write_minimal_png(root / "images" / "frame_000.png")
+
+    result = validate_dataset_path("tanks_and_temples", str(root))
+
+    assert not result.is_valid
+
+
+def test_tanks_and_temples_validation_accepts_scene_under_image_sets(tmp_path: Path) -> None:
+    root = tmp_path / "data" / "tanks_and_temples" / "image_sets" / "Family"
+    root.mkdir(parents=True, exist_ok=True)
+    _write_minimal_png(root / "frame_000.png")
+
+    path_result = validate_dataset_path("tanks_and_temples", str(root))
+    preflight_result = validate_dataset_integrity_preflight(
+        dataset_name="tanks_and_temples",
+        root=str(root),
+        split="train",
+        full_scan=False,
+    )
+
+    assert path_result.is_valid
+    assert preflight_result.is_valid
 
 
 def test_resolve_iterations_adaptive_low_profile() -> None:

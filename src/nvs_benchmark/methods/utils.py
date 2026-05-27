@@ -6,6 +6,8 @@ import json
 import shutil
 from pathlib import Path
 
+from matplotlib import image as mpimg
+
 
 def _candidate_splits(preferred: str | None) -> list[str]:
     """Retorna lista priorizada de splits para procurar transforms."""
@@ -90,3 +92,85 @@ def render_stub_from_dataset(root: str | Path, split: str | None, render_dir: Pa
         return False
     copy_frame_to_render_dir(frame_path, render_dir)
     return True
+
+
+def _save_image_as_png(source_path: Path, target_path: Path) -> None:
+    """Re-salva uma imagem em PNG para padronizar nomes usados nas métricas."""
+    image = mpimg.imread(source_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    mpimg.imsave(target_path, image)
+
+
+def _candidate_reference_images(root_path: Path) -> list[Path]:
+    """Coleta imagens candidatas diretamente na cena ou no diretório images/."""
+    patterns = ("*.png", "*.jpg", "*.jpeg", "*.JPG", "*.PNG")
+    candidates: list[Path] = []
+    for folder in (
+        root_path,
+        root_path / "images",
+        root_path / "images_2",
+        root_path / "images_4",
+        root_path / "images_8",
+        root_path / "image",
+    ):
+        if not folder.exists() or not folder.is_dir():
+            continue
+        for pattern in patterns:
+            candidates.extend(folder.glob(pattern))
+    unique_candidates = sorted({candidate.resolve() for candidate in candidates}, key=lambda path: path.name.lower())
+    return unique_candidates
+
+
+def export_reference_frames_from_dataset(
+    root: str | Path,
+    split: str | None,
+    reference_dir: Path,
+) -> int:
+    """Exporta frames de referência reais do dataset para um diretório temporário.
+
+    As imagens são gravadas como ``frame_XXXX.png`` para manter o mesmo esquema
+    de nomes esperado pelos renders produzidos pelos adaptadores do benchmark.
+    """
+    root_path = Path(root)
+    if not root_path.exists() or not root_path.is_dir():
+        return 0
+
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    for old_file in reference_dir.glob("*.png"):
+        old_file.unlink(missing_ok=True)
+
+    copied = 0
+    for candidate_split in _candidate_splits(split):
+        payload = _load_transforms(root_path, candidate_split)
+        if not payload or not isinstance(payload, dict):
+            continue
+
+        frames = payload.get("frames", [])
+        if not isinstance(frames, list) or not frames:
+            continue
+
+        for index, frame in enumerate(frames):
+            if not isinstance(frame, dict):
+                continue
+            file_path = frame.get("file_path")
+            if not isinstance(file_path, str) or not file_path.strip():
+                continue
+            resolved = _resolve_frame_path(root_path, file_path)
+            if resolved is None:
+                continue
+
+            target_path = reference_dir / f"frame_{index:04d}.png"
+            _save_image_as_png(resolved, target_path)
+            copied += 1
+
+        if copied > 0:
+            return copied
+
+    image_candidates = _candidate_reference_images(root_path)
+    if image_candidates:
+        for index, resolved in enumerate(image_candidates):
+            target_path = reference_dir / f"frame_{index:04d}.png"
+            _save_image_as_png(resolved, target_path)
+        return len(image_candidates)
+
+    return copied

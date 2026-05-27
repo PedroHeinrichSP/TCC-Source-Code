@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -11,11 +12,11 @@ from nvs_benchmark.core import Orchestrator
 from nvs_benchmark.core import InferenceRequest, TrainRequest
 from nvs_benchmark.core.presets import PRESET_NAMES, list_preset_summaries
 from nvs_benchmark.data import SUPPORTED_DATASETS, load_dataset, validate_dataset
-from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot
+from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot, evaluate_benchmark_metrics
 from nvs_benchmark.methods import ExternalMethodAdapter, build_registry_with_all_methods
+from nvs_benchmark.methods.gs_static.adapter import GSStaticHardwareError
 from nvs_benchmark.reporting import generate_comparison_reports
 from nvs_benchmark.runtime import RunLogger, audit_docstrings, save_doc_audit_report
-from nvs_benchmark.ui import run_preview_ui, run_dashboard_ui
 from nvs_benchmark.install import load_install_catalog, install_items
 from nvs_benchmark.cli_extensions import (
     validate_dataset_path,
@@ -23,12 +24,31 @@ from nvs_benchmark.cli_extensions import (
     validate_output_directory,
     validate_method_available,
     validate_snapshot_file,
+    validate_matrix_completeness,
     estimate_execution_time,
     print_validation_result,
     print_separator,
     format_time_estimate,
     get_disk_usage,
 )
+
+
+def _resolve_smoke_dataset_spec() -> DatasetSpec:
+    """Resolve dataset de smoke com fallback para fixture local conhecida."""
+    candidates = [
+        Path("./data/_smoke/blender"),
+        Path("./data/blender_synthetic/nerf_synthetic/lego"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return DatasetSpec(name="blender_synthetic", root=str(candidate))
+    expected = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(f"Nenhum dataset de smoke encontrado. Caminhos verificados: {expected}")
+
+
+def _is_hardware_skip(method_id: str, exc: Exception) -> bool:
+    """Retorna True quando a falha deve virar skip por hardware incompatível."""
+    return method_id == "gs_static" and isinstance(exc, GSStaticHardwareError)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,6 +80,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     metrics_parser.add_argument("--log-dir", default="./logs", help="Diretório de logs estruturados")
 
+    metrics_compute_parser = subparsers.add_parser(
+        "metrics-compute",
+        help="Recomputar métricas a partir de checkpoint e imagens renderizadas pré-existentes",
+    )
+    metrics_compute_parser.add_argument("--method", required=True, help="Identificador do método (ex: nerf_static)")
+    metrics_compute_parser.add_argument("--checkpoint", required=True, help="Caminho para checkpoint treinado")
+    metrics_compute_parser.add_argument("--rendered-dir", required=True, help="Diretório com imagens renderizadas (PNG)")
+    metrics_compute_parser.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS, help="Nome do dataset")
+    metrics_compute_parser.add_argument("--root", required=True, help="Diretório raiz do dataset")
+    metrics_compute_parser.add_argument("--reference-dir", default=None, help="Diretório de imagens de referência (override)")
+    metrics_compute_parser.add_argument("--split", default="train", help="Split do dataset")
+    metrics_compute_parser.add_argument(
+        "--snapshot-file",
+        required=True,
+        help="Arquivo JSON para salvar métricas",
+    )
+    metrics_compute_parser.add_argument(
+        "--append-snapshot",
+        action="store_true",
+        help="Anexar/atualizar método no snapshot existente",
+    )
+    metrics_compute_parser.add_argument(
+        "--train-seconds",
+        type=float,
+        default=0.0,
+        help="Tempo de treinamento em segundos (para referência)",
+    )
+    metrics_compute_parser.add_argument(
+        "--inference-seconds",
+        type=float,
+        default=0.0,
+        help="Tempo de inferência em segundos (para referência)",
+    )
+    metrics_compute_parser.add_argument("--log-dir", default="./logs", help="Diretório de logs estruturados")
+    metrics_compute_parser.add_argument(
+        "--strict-results",
+        action="store_true",
+        help="Falha se metricas invalidas forem detectadas",
+    )
+    metrics_compute_parser.add_argument(
+        "--min-required-pairs",
+        type=int,
+        default=1,
+        help="Numero minimo de pares validos exigidos",
+    )
+
     report_parser = subparsers.add_parser(
         "report-generate",
         help="Gerar relatório comparativo a partir do snapshot de métricas",
@@ -85,6 +151,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Não gerar relatório em PDF",
     )
     report_parser.add_argument("--log-dir", default="./logs", help="Diretório de logs estruturados")
+    report_parser.add_argument(
+        "--strict-snapshot",
+        action="store_true",
+        help="Falhar se o snapshot nao atender criterios de completude/sanidade",
+    )
+    report_parser.add_argument(
+        "--expected-methods",
+        default=None,
+        help="Lista separada por virgula de metodos esperados no snapshot",
+    )
+    report_parser.add_argument(
+        "--min-methods",
+        type=int,
+        default=None,
+        help="Quantidade minima de metodos exigida no snapshot",
+    )
+    report_parser.add_argument(
+        "--require-finite-metrics",
+        action="store_true",
+        help="Exigir metricas finitas em todos os metodos do snapshot",
+    )
+    report_parser.add_argument(
+        "--expected-matrix",
+        default=None,
+        help="Lista separada por virgula de combinacoes esperadas no formato dataset|method",
+    )
 
     docs_parser = subparsers.add_parser("docs-check", help="Auditar docstrings públicas")
     docs_parser.add_argument("--source-dir", default="./src/nvs_benchmark", help="Diretório de código-fonte")
@@ -116,38 +208,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-unit-tests",
         action="store_true",
         help="Executar testes unitários ao final da suíte",
-    )
-
-    ui_parser = subparsers.add_parser("ui-preview", help="Abrir a UI de preview em Viser")
-    ui_parser.add_argument("--host", default="127.0.0.1", help="Host")
-    ui_parser.add_argument("--port", type=int, default=8765, help="Porta")
-    ui_parser.add_argument("--no-browser", action="store_true", help="Não abrir navegador")
-    ui_parser.add_argument(
-        "--metrics-file",
-        default="./artifacts/metrics/latest_preview.json",
-        help="Arquivo JSON de métricas",
-    )
-    ui_parser.add_argument(
-        "--scene-transforms-file",
-        default="./data/blender_synthetic/transforms_train.json",
-        help="Arquivo de transforms para frustums da cena",
-    )
-    ui_parser.add_argument(
-        "--install-catalog-file",
-        default="./configs/install_catalog.json",
-        help="Catalogo JSON de downloads para datasets e modelos",
-    )
-    ui_parser.add_argument(
-        "--dashboard-port",
-        type=int,
-        default=8780,
-        help="Porta do dashboard web",
-    )
-    ui_parser.add_argument(
-        "--viser-port",
-        type=int,
-        default=8765,
-        help="Porta do Viser (iframe)",
     )
 
     install_parser = subparsers.add_parser("install", help="Instalar datasets/modelos via catalogo")
@@ -255,6 +315,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=16,
         help="Quantidade de frames amostrados no preflight quando --validation-full nao for usado",
     )
+    method_parser.add_argument(
+        "--strict-results",
+        action="store_true",
+        help="Falha se metricas invalidas forem detectadas (NaN/inf, pairs insuficiente, fps<=0)",
+    )
+    method_parser.add_argument(
+        "--min-required-pairs",
+        type=int,
+        default=1,
+        help="Numero minimo de pares validos exigidos quando --strict-results estiver ativo",
+    )
 
     subparsers.add_parser("presets-list", help="Listar presets de iterações disponíveis")
 
@@ -316,7 +387,226 @@ def build_parser() -> argparse.ArgumentParser:
         help="Simular ajuste conservador de preset no estimate-time",
     )
 
+    create_adapter_parser = subparsers.add_parser(
+        "create-adapter",
+        help="Gerar scaffold de adaptador de metodo para estudantes",
+    )
+    create_adapter_parser.add_argument(
+        "name",
+        help="Nome do adaptador (ex: meu_metodo). Sera usado como ID e nome da pasta.",
+    )
+    create_adapter_parser.add_argument(
+        "--output-dir",
+        default="./src/nvs_benchmark/methods",
+        help="Diretório onde a pasta do adaptador sera criada",
+    )
+    create_adapter_parser.add_argument(
+        "--kind",
+        default="nerf_static",
+        choices=["nerf_static", "nerf_dynamic", "gs_static", "gs_dynamic", "external"],
+        help="Familia do metodo (define capabilities padrao)",
+    )
+
     return parser
+
+
+def run_create_adapter(name: str, output_dir: str, kind: str) -> int:
+    """Gera scaffold completo de adaptador de metodo para o estudante."""
+    import re
+    import textwrap
+
+    # Validar nome
+    if not re.match(r"^[a-z][a-z0-9_]{1,31}$", name):
+        print("Erro: nome deve comecar com letra minuscula e conter apenas letras, digitos e '_' (max 32 chars).")
+        return 1
+
+    adapter_dir = Path(output_dir) / name
+    if adapter_dir.exists():
+        print(f"Pasta ja existe: {adapter_dir}")
+        print("Remova-a manualmente ou escolha outro nome.")
+        return 1
+
+    is_dynamic = kind in {"nerf_dynamic", "gs_dynamic"}
+    is_gs = kind in {"gs_static", "gs_dynamic"}
+    display_name = name.replace("_", " ").title()
+
+    # --- adapter/__init__.py ---
+    init_content = textwrap.dedent(f"""\
+        \"\"\"Adaptador de metodo: {display_name}.\"\"\"  # noqa: D100
+
+        from .adapter import {name.title().replace('_','')}Adapter
+
+        __all__ = ["{name.title().replace('_','')}Adapter"]
+        """)
+
+    # --- adapter/adapter.py ---
+    supports_dynamic = str(is_dynamic).lower()
+    adapter_content = textwrap.dedent(f"""\
+        \"\"\"Implementacao do adaptador {display_name}.
+
+        Seguir os passos marcados com TODO para completar a integracao.
+        Consulte os adapters existentes e a documentacao principal do projeto para orientacoes.
+        \"\"\"
+
+        from __future__ import annotations
+
+        import subprocess
+        from pathlib import Path
+
+        from nvs_benchmark.core.contracts import (
+            InferenceRequest,
+            InferenceResult,
+            MethodCapabilities,
+            PerformanceStats,
+            RunConfig,
+            TrainRequest,
+            TrainResult,
+        )
+        from nvs_benchmark.methods.subprocess_utils import format_subprocess_error, run_subprocess
+
+
+        class {name.title().replace('_', '')}Adapter:
+            \"\"\"Adaptador para o metodo {display_name}.\"\"\"
+
+            method_id: str = "{name}"
+            display_name: str = "{display_name}"
+            capabilities: MethodCapabilities = MethodCapabilities(
+                supports_train=True,
+                supports_inference=True,
+                supports_dynamic_scene={supports_dynamic},
+                supports_limited_gpu=True,
+            )
+
+            def validate_config(self, config: RunConfig) -> None:
+                \"\"\"Valida a configuracao antes de executar.\"\"\"
+                # TODO: valide pre-condicoes necessarias, ex: GPU disponivel, dataset correto, etc.
+                pass
+
+            def train(self, request: TrainRequest) -> TrainResult:
+                \"\"\"Executa o treinamento do metodo.\"\"\"
+                config = request.config
+                output_dir = Path(config.output_dir) / config.run_id / self.method_id
+                output_dir.mkdir(parents=True, exist_ok=True)
+                checkpoint = output_dir / "checkpoint_final.pth"
+
+                # TODO: construa o comando real para treinar seu metodo.
+                # Exemplo:
+                #   cmd = [
+                #       "python", "./third_party/{name}/train.py",
+                #       "--data", config.dataset.root,
+                #       "--output", str(output_dir),
+                #   ]
+                #   result = run_subprocess(cmd, timeout=config.timeout_seconds)
+                #   if not result.success:
+                #       raise RuntimeError(format_subprocess_error(result))
+
+                # Remova este bloco stub quando implementar o treino real:
+                import time
+                start = time.perf_counter()
+                checkpoint.write_text("# stub checkpoint", encoding="utf-8")
+                elapsed = time.perf_counter() - start
+
+                return TrainResult(
+                    method=self.method_id,
+                    checkpoint_path=str(checkpoint),
+                    train_seconds=elapsed,
+                    output_dir=str(output_dir),
+                )
+
+            def infer(self, request: InferenceRequest) -> InferenceResult:
+                \"\"\"Executa a inferencia (render de imagens de novos pontos de vista).\"\"\"
+                config = request.config
+                render_dir = Path(config.output_dir) / config.run_id / self.method_id / "renders"
+                render_dir.mkdir(parents=True, exist_ok=True)
+
+                # TODO: construa o comando real para inferencia do seu metodo.
+                # Exemplo:
+                #   cmd = [
+                #       "python", "./third_party/{name}/render.py",
+                #       "--checkpoint", request.checkpoint_path,
+                #       "--output", str(render_dir),
+                #   ]
+                #   result = run_subprocess(cmd, timeout=config.timeout_seconds)
+                #   if not result.success:
+                #       raise RuntimeError(format_subprocess_error(result))
+
+                # Stub: copia primeiro frame do dataset como render simulado
+                import time
+                from nvs_benchmark.methods.utils import render_stub_from_dataset
+                start = time.perf_counter()
+                render_stub_from_dataset(root=config.dataset.root, split=request.split, render_dir=render_dir)
+                elapsed = time.perf_counter() - start
+
+                rendered_frames = list(render_dir.glob("*.png")) + list(render_dir.glob("*.jpg"))
+                return InferenceResult(
+                    method=self.method_id,
+                    rendered_dir=str(render_dir),
+                    frames=len(rendered_frames),
+                    inference_seconds=elapsed,
+                )
+
+            def collect_performance(self) -> PerformanceStats:
+                \"\"\"Retorna estatísticas de desempenho medidas durante a execucao.\"\"\"
+                # TODO: preencha com valores reais coletados durante train/infer.
+                return PerformanceStats(
+                    fps=0.0,
+                    vram_gb_peak=0.0,
+                    train_seconds=0.0,
+                    inference_seconds=0.0,
+                )
+        """)
+
+    # --- README.md do adaptador ---
+    readme_content = textwrap.dedent(f"""\
+        # Adaptador: {display_name}
+
+        Este diretorio contem o adaptador NVS Benchmark para o metodo **{display_name}**.
+
+        ## Como implementar
+
+        1. Edite `adapter.py` e substitua os blocos `# TODO` pelo codigo real do seu metodo.
+        2. O metodo deve:
+           - `train()`: executar treinamento e salvar checkpoint
+           - `infer()`: renderizar imagens de novos pontos de vista
+        3. Use `run_subprocess()` de `methods/subprocess_utils.py` para chamar scripts externos.
+        4. Registre o adaptador em `methods/__init__.py` ou `methods/registry.py`.
+
+        ## Testando
+
+        ```bash
+        nvs-benchmark method-run \\\\
+            --method {name} \\\\
+            --dataset blender_synthetic \\\\
+            --root ./data/blender_synthetic/nerf_synthetic/lego \\\\
+            --preset smoke
+        ```
+
+        ## Estrutura
+
+        ```
+        {name}/
+          __init__.py     # exporta o adaptador
+          adapter.py      # implementacao principal (edite aqui)
+          README.md       # este arquivo
+        ```
+        """)
+
+    # Criar arquivos
+    adapter_dir.mkdir(parents=True)
+    (adapter_dir / "__init__.py").write_text(init_content, encoding="utf-8")
+    (adapter_dir / "adapter.py").write_text(adapter_content, encoding="utf-8")
+    (adapter_dir / "README.md").write_text(readme_content, encoding="utf-8")
+
+    print(f"Scaffold criado em: {adapter_dir}")
+    print()
+    print("Proximos passos:")
+    print(f"  1. Edite {adapter_dir / 'adapter.py'} e substitua os blocos TODO")
+    print(f"  2. Registre o adaptador no registry (methods/__init__.py ou methods/registry.py)")
+    print(f"  3. Teste com:")
+    print(f"     nvs-benchmark method-run --method {name} --dataset blender_synthetic ")
+    print(f"       --root ./data/minha_cena --preset smoke")
+    print()
+    return 0
 
 
 def run_init(config_path: str) -> int:
@@ -382,7 +672,9 @@ def run_methods_check(output_dir: str, log_dir: str) -> int:
         print(f"Metodos registrados: {method_ids}")
         logger.event("run_started", {"method_ids": method_ids})
 
-        sample_dataset = DatasetSpec(name="blender_synthetic", root="./data/_smoke/blender")
+        sample_dataset = _resolve_smoke_dataset_spec()
+        completed_methods: list[str] = []
+        skipped_methods: list[str] = []
         for method_id in method_ids:
             config = RunConfig(
                 run_id=f"smoke-{method_id}",
@@ -393,12 +685,19 @@ def run_methods_check(output_dir: str, log_dir: str) -> int:
                 hardware_profile=HardwareProfile.ADAPTIVE,
             )
             method = registry.get(method_id)
-            method.validate_config(config)
-
-            train_result = method.train(TrainRequest(config=config))
-            infer_result = method.infer(
-                InferenceRequest(config=config, checkpoint_path=train_result.checkpoint_path, split="test")
-            )
+            try:
+                method.validate_config(config)
+                train_result = method.train(TrainRequest(config=config))
+                infer_result = method.infer(
+                    InferenceRequest(config=config, checkpoint_path=train_result.checkpoint_path, split="test")
+                )
+            except Exception as exc:
+                if _is_hardware_skip(method_id, exc):
+                    skipped_methods.append(method_id)
+                    logger.event("method_skipped", {"method": method_id, "reason": str(exc)})
+                    print(f"[{method_id}] skipped: {exc}")
+                    continue
+                raise
 
             logger.event(
                 "method_completed",
@@ -410,11 +709,22 @@ def run_methods_check(output_dir: str, log_dir: str) -> int:
                     "inference_seconds": infer_result.inference_seconds,
                 },
             )
+            completed_methods.append(method_id)
             print(f"[{method_id}] checkpoint: {train_result.checkpoint_path}")
             print(f"[{method_id}] renders: {infer_result.rendered_dir}")
 
-        logger.finish("success", {"methods_count": len(method_ids)})
-        print("Integracao dos metodos validada com sucesso.")
+        logger.finish(
+            "success",
+            {
+                "methods_count": len(completed_methods),
+                "skipped_methods": skipped_methods,
+                "dataset_root": sample_dataset.root,
+            },
+        )
+        print(f"Dataset de smoke: {sample_dataset.root}")
+        print(f"Metodos validados com sucesso: {completed_methods}")
+        if skipped_methods:
+            print(f"Metodos pulados por hardware: {skipped_methods}")
         print(f"Logs da execucao: {logger.run_dir}")
         return 0
     except Exception as exc:
@@ -439,8 +749,9 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
         registry = build_registry_with_all_methods()
         orchestrator = Orchestrator(registry=registry)
         method_ids = registry.list_ids()
-        sample_dataset = DatasetSpec(name="blender_synthetic", root="./data/_smoke/blender")
+        sample_dataset = _resolve_smoke_dataset_spec()
         metrics = []
+        skipped_methods: list[str] = []
         logger.event("run_started", {"method_ids": method_ids})
 
         for method_id in method_ids:
@@ -456,7 +767,15 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
                 extra={"skip_snapshot": True, "skip_reports": True},
             )
 
-            result = orchestrator.run(config)
+            try:
+                result = orchestrator.run(config)
+            except Exception as exc:
+                if _is_hardware_skip(method_id, exc):
+                    skipped_methods.append(method_id)
+                    logger.event("method_skipped", {"method": method_id, "reason": str(exc)})
+                    print(f"[{method_id}] skipped: {exc}")
+                    continue
+                raise
             if result.metrics is None:
                 raise RuntimeError(f"Metricas nao foram calculadas para {method_id}.")
             metric = result.metrics
@@ -482,7 +801,18 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
             )
 
         save_metrics_snapshot(metrics, snapshot_file)
-        logger.finish("success", {"snapshot_file": snapshot_file, "methods_count": len(metrics)})
+        logger.finish(
+            "success",
+            {
+                "snapshot_file": snapshot_file,
+                "methods_count": len(metrics),
+                "skipped_methods": skipped_methods,
+                "dataset_root": sample_dataset.root,
+            },
+        )
+        print(f"Dataset de smoke: {sample_dataset.root}")
+        if skipped_methods:
+            print(f"Metodos pulados por hardware: {skipped_methods}")
         print(f"Snapshot salvo em: {snapshot_file}")
         print(f"Logs da execucao: {logger.run_dir}")
         return 0
@@ -490,6 +820,138 @@ def run_metrics_check(output_dir: str, snapshot_file: str, log_dir: str) -> int:
         logger.finish("failed", {"error": str(exc)})
         print(f"Falha em metrics-check: {exc}")
         print(f"Logs da execucao: {logger.run_dir}")
+        return 1
+
+
+def run_metrics_compute(
+    *,
+    method: str,
+    checkpoint: str,
+    rendered_dir: str,
+    dataset: str,
+    root: str,
+    reference_dir: str | None,
+    split: str,
+    snapshot_file: str,
+    append_snapshot: bool,
+    train_seconds: float,
+    inference_seconds: float,
+    log_dir: str,
+    strict_results: bool,
+    min_required_pairs: int,
+) -> int:
+    """Recomputa métricas a partir de checkpoint e imagens renderizadas pré-existentes."""
+    logger = RunLogger(
+        command="metrics-compute",
+        parameters={
+            "method": method,
+            "checkpoint": checkpoint,
+            "rendered_dir": rendered_dir,
+            "dataset": dataset,
+            "root": root,
+            "reference_dir": reference_dir,
+            "split": split,
+            "snapshot_file": snapshot_file,
+            "append_snapshot": append_snapshot,
+            "train_seconds": train_seconds,
+            "inference_seconds": inference_seconds,
+            "strict_results": strict_results,
+            "min_required_pairs": min_required_pairs,
+        },
+        log_dir=log_dir,
+    )
+    try:
+        # Validar arquivos de entrada
+        checkpoint_path = Path(checkpoint)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint não encontrado: {checkpoint}")
+
+        rendered_path = Path(rendered_dir)
+        if not rendered_path.exists() or not rendered_path.is_dir():
+            raise FileNotFoundError(f"Diretório de renders não encontrado: {rendered_dir}")
+
+        # Contar frames PNG
+        frames = len(list(rendered_path.glob("*.png")))
+        if frames == 0:
+            raise ValueError(f"Nenhum arquivo PNG encontrado em: {rendered_dir}")
+
+        print(f"[{method}] Carregado:")
+        print(f"  Checkpoint: {checkpoint}")
+        print(f"  Renders: {rendered_dir} ({frames} frames)")
+        print(f"  Train time: {train_seconds:.1f}s | Inference time: {inference_seconds:.1f}s")
+
+        # Resolver referências
+        if reference_dir:
+            ref_path = Path(reference_dir)
+        else:
+            # Tentar carregar do dataset
+            dataset_spec = load_dataset(dataset_name=dataset, root=root, split=split)
+            # Usar diretório de renders do dataset como referência
+            ref_path = Path(root) / "renders" if (Path(root) / "renders").exists() else rendered_path
+
+        if not ref_path.exists():
+            raise FileNotFoundError(f"Diretório de referência não encontrado: {ref_path}")
+
+        # Computar métricas
+        print(f"\nComputando métricas...")
+        metric = evaluate_benchmark_metrics(
+            method=method,
+            pred_dir=rendered_path,
+            ref_dir=ref_path,
+            frames=frames,
+            train_seconds=train_seconds,
+            inference_seconds=inference_seconds,
+        )
+
+        # Validação de métricas
+        if strict_results:
+            validation_error = _validate_real_metrics(metric, min_required_pairs=min_required_pairs)
+            if validation_error:
+                raise RuntimeError(f"Falha na validação de métricas: {validation_error}")
+
+        # Salvar snapshot
+        _save_method_metric_snapshot(
+            metric=metric,
+            snapshot_file=snapshot_file,
+            append=append_snapshot,
+        )
+
+        if strict_results:
+            snapshot_validation = validate_snapshot_file(snapshot_file, must_exist=True)
+            if not snapshot_validation.is_valid:
+                raise RuntimeError(f"Falha ao validar snapshot: {snapshot_validation.message}")
+
+        logger.event(
+            "metrics_computed",
+            {
+                "method": method,
+                "psnr": metric.psnr,
+                "ssim": metric.ssim,
+                "lpips": metric.lpips,
+                "fps": metric.fps,
+                "vram_gb": metric.vram_gb,
+                "frame_time_ms": metric.frame_time_ms,
+                "latency_p50_ms": metric.latency_p50_ms,
+                "latency_p90_ms": metric.latency_p90_ms,
+                "latency_p99_ms": metric.latency_p99_ms,
+                "snapshot_file": snapshot_file,
+            },
+        )
+
+        print(
+            f"[{method}] PSNR={metric.psnr:.2f} SSIM={metric.ssim:.3f} "
+            f"LPIPS={metric.lpips:.3f} FPS={metric.fps:.2f} VRAM={metric.vram_gb:.2f}"
+        )
+        print(f"✓ Snapshot salvo em: {snapshot_file}")
+
+        logger.finish("success")
+        print("Métricas computadas com sucesso.")
+        print(f"Logs da execução: {logger.run_dir}")
+        return 0
+    except Exception as exc:
+        logger.finish("failed", {"error": str(exc)})
+        print(f"Falha em metrics-compute: {exc}")
+        print(f"Logs da execução: {logger.run_dir}")
         return 1
 
 
@@ -502,6 +964,35 @@ def _load_extra(extra_json: str | None, extra_file: str | None) -> dict:
     if extra_json:
         return json.loads(extra_json)
     return {}
+
+
+def _validate_real_metrics(metric: BenchmarkMetrics, min_required_pairs: int) -> str | None:
+    """Valida se as métricas representam execução real e utilizável."""
+    required_fields = {
+        "pairs": metric.pairs,
+        "psnr": metric.psnr,
+        "ssim": metric.ssim,
+        "lpips": metric.lpips,
+        "fps": metric.fps,
+        "vram_gb": metric.vram_gb,
+        "train_seconds": metric.train_seconds,
+        "inference_seconds": metric.inference_seconds,
+        "frame_time_ms": metric.frame_time_ms,
+        "latency_p50_ms": metric.latency_p50_ms,
+        "latency_p90_ms": metric.latency_p90_ms,
+        "latency_p99_ms": metric.latency_p99_ms,
+    }
+    non_finite = [name for name, value in required_fields.items() if not math.isfinite(float(value))]
+    if non_finite:
+        return f"Campos com valores nao finitos: {', '.join(non_finite)}"
+
+    if metric.pairs < float(min_required_pairs):
+        return f"Pairs insuficiente: {metric.pairs} < {min_required_pairs}"
+
+    if metric.fps <= 0.0:
+        return f"FPS invalido para resultado real: {metric.fps}"
+
+    return None
 
 
 def run_method_run(
@@ -528,6 +1019,8 @@ def run_method_run(
     adaptive_preset: bool = False,
     validation_full: bool = False,
     validation_sample_size: int = 16,
+    strict_results: bool = False,
+    min_required_pairs: int = 1,
 ) -> int:
     """Executa um único método (incluindo external) em um dataset."""
     logger = RunLogger(
@@ -551,6 +1044,8 @@ def run_method_run(
             "adaptive_preset": adaptive_preset,
             "validation_full": validation_full,
             "validation_sample_size": validation_sample_size,
+            "strict_results": strict_results,
+            "min_required_pairs": min_required_pairs,
         },
         log_dir=log_dir,
     )
@@ -650,12 +1145,22 @@ def run_method_run(
 
         if compute_metrics and result.metrics is not None:
             metric = result.metrics
+            if strict_results:
+                validation_error = _validate_real_metrics(metric, min_required_pairs=min_required_pairs)
+                if validation_error:
+                    raise RuntimeError(f"Falha na validacao de metricas reais: {validation_error}")
             if snapshot_file:
                 _save_method_metric_snapshot(
                     metric=metric,
                     snapshot_file=snapshot_file,
                     append=append_snapshot,
                 )
+                if strict_results:
+                    snapshot_validation = validate_snapshot_file(snapshot_file, must_exist=True)
+                    if not snapshot_validation.is_valid:
+                        raise RuntimeError(
+                            f"Falha ao validar snapshot apos method-run: {snapshot_validation.message}"
+                        )
             logger.event(
                 "metrics_computed",
                 {
@@ -679,6 +1184,9 @@ def run_method_run(
             if snapshot_file:
                 print(f"Snapshot atualizado em: {snapshot_file}")
 
+        if compute_metrics and strict_results and result.metrics is None:
+            raise RuntimeError("Falha na validacao de metricas reais: metodo nao retornou metricas.")
+
         logger.finish("success")
         print("Execucao concluida com sucesso.")
         print(f"Logs da execucao: {logger.run_dir}")
@@ -693,10 +1201,18 @@ def run_method_run(
 def run_install(catalog_file: str, only: str, execute: bool) -> int:
     """Instala datasets/modelos a partir do catalogo."""
     catalog = load_install_catalog(catalog_file)
+    fatal_catalog_problem = any(
+        note.startswith("Catalog not found:") or note.startswith("Invalid catalog JSON:")
+        for note in catalog.notes
+    )
+    for note in catalog.notes:
+        print(f"[note] {note}")
     messages = install_items(catalog=catalog, only=only, execute=execute)
+    if not messages:
+        print(f"[info] Nenhum item encontrado para instalacao com --only {only}.")
     for line in messages:
         print(line)
-    return 0
+    return 1 if fatal_catalog_problem else 0
 
 
 def _metric_from_snapshot_entry(method: str, payload: dict) -> BenchmarkMetrics:
@@ -737,25 +1253,18 @@ def _save_method_metric_snapshot(metric: BenchmarkMetrics, snapshot_file: str, a
     save_metrics_snapshot(list(merged.values()), snapshot_file)
 
 
-def run_ui_preview(host: str, port: int, no_browser: bool, metrics_file: str, scene_transforms_file: str, install_catalog_file: str, dashboard_port: int, viser_port: int) -> int:
-    """Inicia UI Viser para métricas e pré-visualização 3D da cena."""
-    effective_dashboard_port = dashboard_port
-    if port != 8765 and dashboard_port == 8780:
-        effective_dashboard_port = port
-
-    run_dashboard_ui(
-        host=host,
-        dashboard_port=effective_dashboard_port,
-        viser_port=viser_port,
-        open_browser=not no_browser,
-        metrics_file=metrics_file,
-        scene_transforms_file=scene_transforms_file,
-        install_catalog_file=install_catalog_file,
-    )
-    return 0
-
-
-def run_report_generate(snapshot_file: str, output_dir: str, report_name: str, no_pdf: bool, log_dir: str) -> int:
+def run_report_generate(
+    snapshot_file: str,
+    output_dir: str,
+    report_name: str,
+    no_pdf: bool,
+    log_dir: str,
+    strict_snapshot: bool = False,
+    expected_methods: str | None = None,
+    min_methods: int | None = None,
+    require_finite_metrics: bool = False,
+    expected_matrix: str | None = None,
+) -> int:
     """Gera relatório comparativo a partir de um snapshot."""
     logger = RunLogger(
         command="report-generate",
@@ -765,16 +1274,41 @@ def run_report_generate(snapshot_file: str, output_dir: str, report_name: str, n
             "report_name": report_name,
             "no_pdf": no_pdf,
             "log_dir": log_dir,
+            "strict_snapshot": strict_snapshot,
+            "expected_methods": expected_methods,
+            "min_methods": min_methods,
+            "require_finite_metrics": require_finite_metrics,
+            "expected_matrix": expected_matrix,
         },
         log_dir=log_dir,
     )
     try:
         logger.event("run_started")
+        parsed_expected_methods: list[str] | None = None
+        if expected_methods:
+            parsed_expected_methods = [item.strip() for item in expected_methods.split(",") if item.strip()]
+
+        if strict_snapshot and expected_matrix:
+            matrix_result = validate_matrix_completeness(
+                snapshot_file,
+                expected_combos=[item.strip() for item in expected_matrix.split(",") if item.strip()],
+                strict=True,
+            )
+            if not matrix_result.is_valid:
+                print(matrix_result.message)
+                print_validation_result(matrix_result, verbose=True)
+                logger.finish("failed", {"error": matrix_result.message, "details": matrix_result.details})
+                return 1
+
         result = generate_comparison_reports(
             snapshot_file=snapshot_file,
             output_dir=output_dir,
             report_name=report_name,
             generate_pdf=not no_pdf,
+            strict_snapshot=strict_snapshot,
+            expected_methods=parsed_expected_methods,
+            min_methods=min_methods,
+            require_finite_metrics=require_finite_metrics,
         )
         logger.finish("success", result)
         print(f"Vencedor geral (rank medio): {result['winner']}")
@@ -835,7 +1369,11 @@ def run_standard_test(
             ("contracts", lambda: run_contracts_check()),
             (
                 "dataset-check",
-                lambda: run_dataset_check(dataset="blender_synthetic", root="./data/_smoke/blender", split="train"),
+                lambda: run_dataset_check(
+                    dataset="blender_synthetic",
+                    root=_resolve_smoke_dataset_spec().root,
+                    split="train",
+                ),
             ),
             ("methods-check", lambda: run_methods_check(output_dir=output_dir, log_dir=log_dir)),
             (
@@ -1111,22 +1649,28 @@ def main() -> int:
             snapshot_file=args.snapshot_file,
             log_dir=args.log_dir,
         )
+    if args.command == "metrics-compute":
+        return run_metrics_compute(
+            method=args.method,
+            checkpoint=args.checkpoint,
+            rendered_dir=args.rendered_dir,
+            dataset=args.dataset,
+            root=args.root,
+            reference_dir=args.reference_dir,
+            split=args.split,
+            snapshot_file=args.snapshot_file,
+            append_snapshot=args.append_snapshot,
+            train_seconds=args.train_seconds,
+            inference_seconds=args.inference_seconds,
+            log_dir=args.log_dir,
+            strict_results=args.strict_results,
+            min_required_pairs=args.min_required_pairs,
+        )
     if args.command == "install":
         return run_install(
             catalog_file=args.catalog_file,
             only=args.only,
             execute=args.execute,
-        )
-    if args.command == "ui-preview":
-        return run_ui_preview(
-            host=args.host,
-            port=args.port,
-            no_browser=args.no_browser,
-            metrics_file=args.metrics_file,
-            scene_transforms_file=args.scene_transforms_file,
-            install_catalog_file=args.install_catalog_file,
-            dashboard_port=args.dashboard_port,
-            viser_port=args.viser_port,
         )
     if args.command == "report-generate":
         return run_report_generate(
@@ -1135,6 +1679,11 @@ def main() -> int:
             report_name=args.report_name,
             no_pdf=args.no_pdf,
             log_dir=args.log_dir,
+            strict_snapshot=args.strict_snapshot,
+            expected_methods=args.expected_methods,
+            min_methods=args.min_methods,
+            require_finite_metrics=args.require_finite_metrics,
+            expected_matrix=args.expected_matrix,
         )
     if args.command == "docs-check":
         return run_docs_check(
@@ -1174,6 +1723,8 @@ def main() -> int:
             adaptive_preset=args.adaptive_preset,
             validation_full=args.validation_full,
             validation_sample_size=args.validation_sample_size,
+            strict_results=args.strict_results,
+            min_required_pairs=args.min_required_pairs,
         )
     if args.command == "presets-list":
         summaries = list_preset_summaries()
@@ -1207,6 +1758,12 @@ def main() -> int:
             validation_full=args.validation_full,
             validation_sample_size=args.validation_sample_size,
             adaptive_preset=args.adaptive_preset,
+        )
+    if args.command == "create-adapter":
+        return run_create_adapter(
+            name=args.name,
+            output_dir=args.output_dir,
+            kind=args.kind,
         )
 
     parser.print_help()

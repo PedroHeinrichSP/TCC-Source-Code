@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -95,6 +96,50 @@ def _load_snapshot(snapshot_file: str | Path) -> list[MethodMetrics]:
     return methods
 
 
+def _validate_snapshot_methods(
+    methods: list[MethodMetrics],
+    *,
+    expected_methods: list[str] | None,
+    min_methods: int | None,
+    require_finite_metrics: bool,
+) -> None:
+    """Valida cobertura e sanidade do snapshot antes de gerar ranking."""
+    if min_methods is not None and len(methods) < int(min_methods):
+        raise ValueError(
+            f"Snapshot insuficiente para gerar relatorio: {len(methods)} metodos < {int(min_methods)}"
+        )
+
+    if expected_methods:
+        present = {item.method for item in methods}
+        missing = [method for method in expected_methods if method not in present]
+        if missing:
+            raise ValueError(f"Snapshot incompleto. Metodos ausentes: {missing}")
+
+    if require_finite_metrics:
+        invalid: list[str] = []
+        for method in methods:
+            values = [
+                method.psnr,
+                method.ssim,
+                method.lpips,
+                method.fps,
+                method.vram_gb,
+                method.train_seconds,
+                method.inference_seconds,
+                method.frame_time_ms,
+                method.latency_p50_ms,
+                method.latency_p90_ms,
+                method.latency_p99_ms,
+            ]
+            if any(not math.isfinite(float(value)) for value in values):
+                invalid.append(method.method)
+
+        if invalid:
+            raise ValueError(
+                f"Snapshot contem metricas nao finitas para metodo(s): {invalid}"
+            )
+
+
 def _rank(methods: list[MethodMetrics], accessor, descending: bool) -> dict[str, int]:
     """Retorna mapeamento de ranking para o acessor de métrica."""
     sorted_methods = sorted(methods, key=accessor, reverse=descending)
@@ -168,6 +213,66 @@ def _encode_image_base64(path: Path | None) -> str | None:
     return f"data:image/png;base64,{encoded}"
 
 
+def _create_side_by_side_comparison_image(
+    render_path: Path,
+    reference_path: Path,
+    output_path: Path,
+    *,
+    title: str,
+) -> Path | None:
+    """Cria uma imagem lado a lado de render gerado e referência original."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+        from matplotlib import image as mpimg
+    except Exception:
+        return None
+
+    try:
+        render_image = mpimg.imread(render_path)
+        reference_image = mpimg.imread(reference_path)
+    except Exception:
+        return None
+
+    def _normalize(image: np.ndarray) -> np.ndarray:
+        array = np.asarray(image)
+        if array.ndim == 2:
+            array = np.stack([array] * 3, axis=-1)
+        if array.shape[-1] > 3:
+            array = array[..., :3]
+        if np.issubdtype(array.dtype, np.integer):
+            array = array.astype(np.float32) / 255.0
+        else:
+            array = array.astype(np.float32)
+            if float(np.nanmax(array)) > 1.0:
+                array = np.clip(array / 255.0, 0.0, 1.0)
+        return np.clip(array, 0.0, 1.0)
+
+    render_image = _normalize(render_image)
+    reference_image = _normalize(reference_image)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.8), dpi=180)
+    fig.patch.set_facecolor("white")
+    fig.suptitle(title, fontsize=13, fontweight="semibold")
+
+    panels = [
+        (axes[0], reference_image, "Original"),
+        (axes[1], render_image, "Gerada"),
+    ]
+    for axis, image, label in panels:
+        axis.imshow(image)
+        axis.set_title(label, fontsize=11)
+        axis.axis("off")
+
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
 def _plot_metric_chart(comparison: list[MethodComparison], key: str, title: str, ylabel: str) -> str | None:
     """Renderiza gráfico de barras de métrica e retorna como data URI."""
     try:
@@ -232,13 +337,31 @@ def _render_chart_section(comparison: list[MethodComparison]) -> str:
     )
 
 
-def _render_visual_section(comparison: list[MethodComparison], artifacts_root: Path) -> str:
-    """Monta cards HTML com renders e referências de exemplo."""
+def _render_visual_section(
+    comparison: list[MethodComparison],
+    artifacts_root: Path,
+    report_assets_dir: Path | None = None,
+) -> str:
+    """Monta cards HTML com renders, referências e comparação lado a lado."""
     cards = []
     for item in comparison:
-        render_uri = _encode_image_base64(_find_method_image(artifacts_root, item.method, "renders"))
-        ref_uri = _encode_image_base64(_find_method_image(artifacts_root, item.method, "references"))
-        if not render_uri and not ref_uri:
+        render_path = _find_method_image(artifacts_root, item.method, "renders")
+        ref_path = _find_method_image(artifacts_root, item.method, "references")
+        render_uri = _encode_image_base64(render_path)
+        ref_uri = _encode_image_base64(ref_path)
+        comparison_uri = None
+        comparison_path = None
+        if render_path and ref_path and report_assets_dir is not None:
+            comparison_path = report_assets_dir / f"{item.method}_comparison.png"
+            created = _create_side_by_side_comparison_image(
+                render_path,
+                ref_path,
+                comparison_path,
+                title=f"Comparação visual - {item.method}",
+            )
+            comparison_uri = _encode_image_base64(created)
+
+        if not render_uri and not ref_uri and not comparison_uri:
             continue
 
         render_block = (
@@ -251,6 +374,11 @@ def _render_visual_section(comparison: list[MethodComparison], artifacts_root: P
             if ref_uri
             else "<p>Referência não encontrada.</p>"
         )
+        comparison_block = (
+            f"<img src='{comparison_uri}' alt='Comparação {escape(item.method)}' />"
+            if comparison_uri
+            else "<p>Comparação lado a lado não disponível.</p>"
+        )
         cards.append(
             "<div class='visual-card'>"
             f"<strong>{escape(item.method)}</strong>"
@@ -259,6 +387,9 @@ def _render_visual_section(comparison: list[MethodComparison], artifacts_root: P
             "</div>"
             "<div>"
             f"{ref_block}"
+            "</div>"
+            "<div>"
+            f"{comparison_block}"
             "</div>"
             "</div>"
         )
@@ -274,12 +405,66 @@ def _render_visual_section(comparison: list[MethodComparison], artifacts_root: P
     )
 
 
-def _render_html(comparison: list[MethodComparison], generated_at: str, snapshot_file: str | Path) -> str:
+def _render_comparison_image_section(
+    comparison: list[MethodComparison],
+    artifacts_root: Path,
+    report_assets_dir: Path | None = None,
+) -> str:
+    """Monta uma seção dedicada à comparação original vs gerada."""
+    cards = []
+    for item in comparison:
+        render_path = _find_method_image(artifacts_root, item.method, "renders")
+        ref_path = _find_method_image(artifacts_root, item.method, "references")
+        if not render_path or not ref_path:
+            continue
+
+        comparison_path = None
+        if report_assets_dir is not None:
+            comparison_path = report_assets_dir / f"{item.method}_comparison.png"
+            created = _create_side_by_side_comparison_image(
+                render_path,
+                ref_path,
+                comparison_path,
+                title=f"Comparação visual - {item.method}",
+            )
+        else:
+            created = None
+
+        comparison_uri = _encode_image_base64(created)
+        if not comparison_uri:
+            continue
+
+        cards.append(
+            "<div class='comparison-card'>"
+            f"<strong>{escape(item.method)}</strong>"
+            f"<img src='{comparison_uri}' alt='Comparação lado a lado {escape(item.method)}' />"
+            "<p>Esquerda: original. Direita: gerada.</p>"
+            "</div>"
+        )
+
+    if not cards:
+        return ""
+
+    return (
+        "<h2>Imagem de comparação</h2>"
+        "<div class='comparison-grid'>"
+        f"{''.join(cards)}"
+        "</div>"
+    )
+
+
+def _render_html(
+    comparison: list[MethodComparison],
+    generated_at: str,
+    snapshot_file: str | Path,
+    report_assets_dir: Path | None = None,
+) -> str:
     """Renderiza relatório HTML como string única."""
     winner = comparison[0]
     artifacts_root = _resolve_artifacts_root(snapshot_file)
     charts_html = _render_chart_section(comparison)
-    visuals_html = _render_visual_section(comparison, artifacts_root)
+    comparison_html = _render_comparison_image_section(comparison, artifacts_root, report_assets_dir)
+    visuals_html = _render_visual_section(comparison, artifacts_root, report_assets_dir)
 
     raw_rows = []
     ranking_rows = []
@@ -332,6 +517,10 @@ def _render_html(comparison: list[MethodComparison], generated_at: str, snapshot
     .charts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }}
     .chart-card {{ border: 1px solid #d0d7de; border-radius: 10px; padding: 12px; background: #fff; }}
     .chart-card img {{ width: 100%; height: auto; display: block; }}
+        .comparison-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }}
+        .comparison-card {{ border: 1px solid #d0d7de; border-radius: 10px; padding: 12px; background: #fff; }}
+        .comparison-card img {{ width: 100%; height: auto; display: block; border-radius: 6px; margin-top: 8px; }}
+        .comparison-card p {{ margin: 8px 0 0 0; color: #5f6368; font-size: 12px; }}
     .visual-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }}
     .visual-card {{ border: 1px solid #d0d7de; border-radius: 10px; padding: 12px; background: #fff; }}
     .visual-card img {{ width: 100%; height: auto; border-radius: 6px; margin-top: 8px; }}
@@ -347,6 +536,8 @@ def _render_html(comparison: list[MethodComparison], generated_at: str, snapshot
   </div>
 
   {charts_html}
+
+    {comparison_html}
 
   <h2>Métricas brutas</h2>
   <table>
@@ -410,16 +601,33 @@ def generate_comparison_reports(
     output_dir: str | Path,
     report_name: str = "benchmark_report",
     generate_pdf: bool = True,
+    strict_snapshot: bool = False,
+    expected_methods: list[str] | None = None,
+    min_methods: int | None = None,
+    require_finite_metrics: bool = False,
 ) -> dict[str, str]:
     """Gera relatórios comparativos HTML/PDF e retorna caminhos de saída."""
     methods = _load_snapshot(snapshot_file)
+    if strict_snapshot:
+        _validate_snapshot_methods(
+            methods,
+            expected_methods=expected_methods,
+            min_methods=min_methods,
+            require_finite_metrics=require_finite_metrics,
+        )
     comparison = _build_comparison(methods)
 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    report_assets_dir = root / f"{report_name}_assets"
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    html_content = _render_html(comparison, generated_at=generated_at, snapshot_file=snapshot_file)
+    html_content = _render_html(
+        comparison,
+        generated_at=generated_at,
+        snapshot_file=snapshot_file,
+        report_assets_dir=report_assets_dir,
+    )
     html_path = root / f"{report_name}.html"
     html_path.write_text(html_content, encoding="utf-8")
 
@@ -427,6 +635,9 @@ def generate_comparison_reports(
         "winner": comparison[0].method,
         "html_path": str(html_path),
     }
+
+    if report_assets_dir.exists() and any(report_assets_dir.glob("*.png")):
+        result["comparison_images_dir"] = str(report_assets_dir)
 
     if generate_pdf:
         pdf_path = root / f"{report_name}.pdf"
@@ -524,11 +735,13 @@ def generate_experiments_comparison_report(
     comparison = _build_comparison(selected)
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    report_assets_dir = root / f"{report_name}_assets"
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     html_content = _render_html(
         comparison,
         generated_at=generated_at,
         snapshot_file=f"experiments:{','.join(run_ids)}",
+        report_assets_dir=report_assets_dir,
     )
 
     html_path = root / f"{report_name}.html"
@@ -537,6 +750,8 @@ def generate_experiments_comparison_report(
         "winner": comparison[0].method,
         "html_path": str(html_path),
     }
+    if report_assets_dir.exists() and any(report_assets_dir.glob("*.png")):
+        result["comparison_images_dir"] = str(report_assets_dir)
     if missing:
         result["missing_runs"] = ",".join(missing)
 

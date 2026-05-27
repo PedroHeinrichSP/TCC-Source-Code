@@ -75,6 +75,6 @@ echo "════════════════════════�
 echo ""
 echo "Next steps:"
 echo "  1. Run a quick benchmark:    bash ./scripts/benchmark_quick.sh"
-echo "  2. View 3D results:          bash ./scripts/preview.sh"
+echo "  2. Generate report:          bash ./scripts/generate_report.sh"
 echo "  3. Generate HTML report:     bash ./scripts/generate_report.sh"
 echo ""

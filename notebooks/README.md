@@ -1,11 +1,19 @@
 # Notebooks
 
-Notebook de operacao do benchmark (RF08):
+Este diretorio concentra exemplos e analises do benchmark.
 
-- `notebooks/nvs_benchmark_pipeline.ipynb`
+## Principais notebooks
 
-O notebook executa o fluxo completo: instalacao, metrics-check, report-generate e abertura da UI.
+- `nvs_benchmark_local_pc.ipynb`
+- `nvs_benchmark_local_blender_synthetic.ipynb`
+- `nvs_benchmark_colab.ipynb`
 
-Para rastreabilidade/reprodutibilidade, consulte os logs em `./logs/runs/<run_id>/`.
+## Uso recomendado
 
-Validacao manual de UX/UI e frustums 3D: `docs/TESTS_BANCADA.md`.
+- Local generico: `nvs_benchmark_local_pc.ipynb`
+- Local focado em Blender Synthetic: `nvs_benchmark_local_blender_synthetic.ipynb`
+- Colab: `nvs_benchmark_colab.ipynb`
+
+## Observacao sobre `gs_dynamic`
+
+O notebook do Colab inclui preparacao e probes para `gs_dynamic`, mas isso nao garante execucao real do `4DGaussians` no runtime padrao do Colab. Consulte [docs/4DGS_COLAB_LIMITACOES.md](/mnt/c/Users/Admin/Projetos/TCC/docs/4DGS_COLAB_LIMITACOES.md) antes de usar `gs_dynamic` em comparacoes finais.

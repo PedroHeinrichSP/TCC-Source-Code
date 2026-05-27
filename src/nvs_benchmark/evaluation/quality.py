@@ -17,11 +17,13 @@ def _to_float32_rgb(image: np.ndarray) -> np.ndarray:
     """Normalize image to float32 in [0, 1] with 3 channels."""
     if image.ndim == 2:
         image = np.stack([image, image, image], axis=-1)
-    if image.ndim == 3 and image.shape[2] == 4:
-        image = image[:, :, :3]
     image = image.astype(np.float32)
     if image.max() > 1.0:
         image = image / 255.0
+    if image.ndim == 3 and image.shape[2] == 4:
+        rgb = image[:, :, :3]
+        alpha = image[:, :, 3:4]
+        image = rgb * alpha + (1.0 - alpha)
     return np.clip(image, 0.0, 1.0)
 
 

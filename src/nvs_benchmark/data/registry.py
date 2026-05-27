@@ -8,7 +8,7 @@ from pathlib import Path
 
 from nvs_benchmark.core import DatasetSpec
 
-SUPPORTED_DATASETS = ["blender_synthetic", "d_nerf", "custom"]
+SUPPORTED_DATASETS = ["blender_synthetic", "d_nerf", "mipnerf360", "tanks_and_temples", "custom"]
 
 
 class DatasetValidationError(ValueError):
@@ -22,6 +22,29 @@ def _count_image_files(root: Path) -> int:
     for pattern in patterns:
         total += len(list(root.rglob(pattern)))
     return total
+
+
+def _has_direct_image_files(root: Path) -> bool:
+    """Verifica se o diretório contém imagens diretamente no nível raiz."""
+    patterns = ("*.png", "*.jpg", "*.jpeg", "*.JPG", "*.PNG")
+    return any(next(root.glob(pattern), None) is not None for pattern in patterns)
+
+
+def _is_tanks_and_temples_scene_root(root: Path) -> bool:
+    """Verifica se a raiz pertence a uma cena extraída do Tanks and Temples."""
+    if not root.exists() or not root.is_dir():
+        return False
+
+    ancestor_names = {parent.name.lower() for parent in root.parents}
+    if not ancestor_names.intersection({"image_sets", "videos"}):
+        return False
+
+    if _existing_splits(root):
+        return True
+
+    images_dir = root / "images"
+    poses_bounds = root / "poses_bounds.npy"
+    return images_dir.exists() or poses_bounds.exists() or _has_direct_image_files(root)
 
 
 def _existing_splits(root: Path) -> list[str]:
@@ -151,13 +174,108 @@ class CustomDatasetLoader:
         return DatasetSpec(name=self.dataset_name, root=str(root_path), split=split_to_use, metadata=metadata)
 
 
-def get_loader(dataset_name: str) -> BlenderSyntheticLoader | DNeRFLoader | CustomDatasetLoader:
+@dataclass
+class MipNeRF360Loader:
+    """Carregador para o formato Mip-NeRF 360 (cenas de escala real unbounded)."""
+
+    dataset_name: str = "mipnerf360"
+
+    def validate(self, root: str | Path) -> None:
+        """Valida estrutura mínima esperada para Mip-NeRF 360."""
+        root_path = Path(root)
+        if not root_path.exists() or not root_path.is_dir():
+            raise DatasetValidationError(f"Diretorio invalido para dataset: {root_path}")
+
+        splits = _existing_splits(root_path)
+        if not splits:
+            # Formato alternativo: COLMAP sparse
+            sparse_dir = root_path / "sparse" / "0"
+            if not sparse_dir.exists():
+                raise DatasetValidationError(
+                    "Mip-NeRF 360 requer transforms_*.json ou diretorio sparse/0 (COLMAP)."
+                )
+
+    def load(self, root: str | Path, split: str = "train") -> DatasetSpec:
+        """Carrega metadados do split solicitado para Mip-NeRF 360."""
+        root_path = Path(root)
+        self.validate(root_path)
+        available = _existing_splits(root_path)
+        split_to_use = split if split in available else (available[0] if available else split)
+
+        frames = []
+        if available:
+            try:
+                transforms = _read_transforms(root_path, split_to_use)
+                frames = transforms.get("frames", [])
+            except DatasetValidationError:
+                pass
+
+        metadata = {
+            "available_splits": available,
+            "frame_count": len(frames),
+            "image_file_count": _count_image_files(root_path),
+            "format": "mipnerf360",
+            "note": "Cenas unbounded de escala real. Download: https://jonbarron.info/mipnerf360/",
+        }
+        return DatasetSpec(name=self.dataset_name, root=str(root_path), split=split_to_use, metadata=metadata)
+
+
+@dataclass
+class TanksAndTemplesLoader:
+    """Carregador para o formato Tanks and Temples (cenas de grande escala)."""
+
+    dataset_name: str = "tanks_and_temples"
+
+    def validate(self, root: str | Path) -> None:
+        """Valida estrutura mínima esperada para Tanks and Temples."""
+        root_path = Path(root)
+        if not root_path.exists() or not root_path.is_dir():
+            raise DatasetValidationError(f"Diretorio invalido para dataset: {root_path}")
+
+        if not _is_tanks_and_temples_scene_root(root_path):
+            raise DatasetValidationError(
+                "Tanks and Temples requer uma cena extraida em image_sets/<cena> ou videos/<cena> "
+                "com imagens, images/, poses_bounds.npy ou transforms_*.json."
+            )
+
+    def load(self, root: str | Path, split: str = "train") -> DatasetSpec:
+        """Carrega metadados do split solicitado para Tanks and Temples."""
+        root_path = Path(root)
+        self.validate(root_path)
+        available = _existing_splits(root_path)
+        split_to_use = split if split in available else (available[0] if available else split)
+
+        frames = []
+        if available:
+            try:
+                transforms = _read_transforms(root_path, split_to_use)
+                frames = transforms.get("frames", [])
+            except DatasetValidationError:
+                pass
+
+        metadata = {
+            "available_splits": available,
+            "frame_count": len(frames),
+            "image_file_count": _count_image_files(root_path),
+            "format": "tanks_and_temples",
+            "note": "Cenas de grande escala. Download: https://www.tanksandtemples.org/download/",
+        }
+        return DatasetSpec(name=self.dataset_name, root=str(root_path), split=split_to_use, metadata=metadata)
+
+
+def get_loader(
+    dataset_name: str,
+) -> BlenderSyntheticLoader | DNeRFLoader | MipNeRF360Loader | TanksAndTemplesLoader | CustomDatasetLoader:
     """Resolve o carregador adequado para um dataset suportado."""
     normalized = dataset_name.strip().lower()
     if normalized == "blender_synthetic":
         return BlenderSyntheticLoader()
     if normalized == "d_nerf":
         return DNeRFLoader()
+    if normalized in {"mipnerf360", "mip_nerf_360", "mip-nerf-360"}:
+        return MipNeRF360Loader()
+    if normalized in {"tanks_and_temples", "tanksandtemples", "tanks-and-temples"}:
+        return TanksAndTemplesLoader()
     if normalized == "custom":
         return CustomDatasetLoader()
     raise DatasetValidationError(

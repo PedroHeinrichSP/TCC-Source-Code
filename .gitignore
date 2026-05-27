@@ -9,6 +9,12 @@ venv/
 venv-mx330-311/
 .venv-mx330/
 venv-mx330/
+scripts/windows/venv/
+scripts/windows/.venv/
+scripts/windows/.venv-mx330-311/
+scripts/windows/venv-mx330-311/
+scripts/windows/.venv-mx330/
+scripts/windows/venv-mx330/
 
 # Notebooks
 .ipynb_checkpoints/
@@ -22,15 +28,28 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
 
 # Third-party repositories (external dependencies)
 # These are large external repos and should be cloned separately
 third_party/
 !third_party/.gitkeep
 
-# Documentation (large docs not needed in repo)
+# Documentation and notes
 docs/
-!docs/.gitkeep
 
 # Datasets (too large to store in git)
 # Download using scripts/download_dataset.* instead
@@ -46,3 +65,9 @@ logs/
 !logs/.gitkeep
 
 !src/nvs_benchmark/.gitkeep
+
+.agents/
+.github/instructions/
+
+.venv-wsl/
+.vscode

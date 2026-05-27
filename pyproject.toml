@@ -9,12 +9,20 @@ description = "Educational benchmark for dynamic NVS methods"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "TCC NVS Benchmark" }]
+license = { text = "MIT" }
+keywords = ["nerf", "gaussian-splatting", "benchmark", "novel-view-synthesis"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "numpy>=1.26",
   "pandas>=2.2",
   "pyyaml>=6.0",
   "scikit-image>=0.22",
-  "viser>=0.1.32",
+  "requests>=2.31",
   "lpips>=0.1.4",
   "torch>=2.2",
   "torchvision>=0.17",
@@ -28,14 +36,66 @@ dependencies = [
   "imageio>=2.34",
   "imageio-ffmpeg>=0.6",
   "opencv-python>=4.10",
+  "plyfile>=1.0.3",
+  "joblib>=1.4",
   "tensorboard>=2.16",
 ]
 
 [project.scripts]
 nvs-benchmark = "nvs_benchmark.cli:main"
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.1",
+  "pytest-cov>=5.0",
+  "ruff>=0.4",
+  "mypy>=1.10",
+  "types-PyYAML",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# ---------------------------------------------------------------------------
+# Ferramentas de qualidade de código
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+exclude = ["third_party", "venv", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nvs_benchmark"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+strict = false
+warn_unused_ignores = true
+warn_return_any = false
+exclude = [
+  "third_party/",
+  "venv/",
+  "build/",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -q"
+
+[tool.coverage.run]
+source = ["src/nvs_benchmark"]
+omit = ["*/third_party/*", "*/venv/*", "*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true
+skip_covered = false

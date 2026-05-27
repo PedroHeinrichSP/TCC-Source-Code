@@ -12,6 +12,7 @@ from typing import Any
 from nvs_benchmark.evaluation import BenchmarkMetrics, evaluate_benchmark_metrics, save_metrics_snapshot, write_reference_image
 from nvs_benchmark.reporting import generate_comparison_reports
 from nvs_benchmark.data.fingerprint import build_dataset_fingerprint
+from nvs_benchmark.methods.utils import export_reference_frames_from_dataset
 
 from .cache_registry import CacheEntry, CacheRegistry
 from .contracts import InferenceRequest, InferenceResult, ReportFormat, RunArtifacts, RunConfig, TrainRequest
@@ -58,6 +59,31 @@ class Orchestrator:
         return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     @staticmethod
+    def _resolve_reference_split(config: RunConfig) -> str:
+        """Resolve o split de referencia a ser usado nas metricas.
+
+        O split informado no dataset normalmente representa o conjunto usado
+        para treino. Para os adapters reais atuais, a inferencia padrao usa o
+        split de teste; logo, quando o treino ocorre em ``train`` e nao ha
+        override explicito, as referencias tambem devem vir de ``test``.
+        """
+        explicit = str(config.extra.get("reference_split", "")).strip().lower()
+        if explicit:
+            return explicit
+
+        method_eval_split = str(config.extra.get("gs_eval_split", "")).strip().lower()
+        if method_eval_split:
+            return method_eval_split
+
+        dynamic_eval_split = str(config.extra.get("gs_dynamic_eval_split", "")).strip().lower()
+        if dynamic_eval_split:
+            return dynamic_eval_split
+
+        if config.dataset.split == "train":
+            return "test"
+        return config.dataset.split
+
+    @staticmethod
     def _metrics_from_cache_payload(payload: dict[str, Any]) -> BenchmarkMetrics:
         return BenchmarkMetrics(
             method=str(payload["method"]),
@@ -90,9 +116,9 @@ class Orchestrator:
         """
         method = self.registry.get(config.method)
         method.validate_config(config)
-        cache_enabled = config.extra.get("cache_enabled", True)
-        reuse_renders = config.extra.get("reuse_renders", True)
-        reuse_metrics = config.extra.get("reuse_metrics", True)
+        cache_enabled = bool(config.extra.get("cache_enabled", True))
+        reuse_renders = bool(config.extra.get("reuse_renders", False))
+        reuse_metrics = bool(config.extra.get("reuse_metrics", False))
         cache_max_size_gb = float(config.extra.get("cache_max_size_gb", 50.0))
 
         cache_registry = CacheRegistry(output_dir=config.output_dir)
@@ -200,7 +226,14 @@ class Orchestrator:
                 ref_dir = Path(reference_dir)
             else:
                 ref_dir = Path(config.output_dir) / config.run_id / config.method / "references"
-                write_reference_image(ref_dir)
+                reference_split = self._resolve_reference_split(config)
+                copied = export_reference_frames_from_dataset(
+                    root=config.dataset.root,
+                    split=reference_split,
+                    reference_dir=ref_dir,
+                )
+                if copied == 0:
+                    write_reference_image(ref_dir)
 
             metrics_cache_key = hashlib.sha256(
                 (
