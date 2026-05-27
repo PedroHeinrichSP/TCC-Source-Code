@@ -53,6 +53,35 @@ def _build_colmap_scene(scene_root: Path) -> Path:
     return scene_root
 
 
+def _build_colmap_scene_with_mips(scene_root: Path) -> Path:
+    images_dir = scene_root / "images"
+    images_8_dir = scene_root / "images_8"
+    sparse_dir = scene_root / "sparse" / "0"
+    images_dir.mkdir(parents=True)
+    images_8_dir.mkdir(parents=True)
+    sparse_dir.mkdir(parents=True)
+
+    imageio.imwrite(images_dir / "frame_0001.png", np.zeros((8, 12, 4), dtype=np.uint8))
+    imageio.imwrite(images_dir / "frame_0002.png", np.zeros((8, 12, 4), dtype=np.uint8))
+    imageio.imwrite(images_8_dir / "frame_0001.png", np.zeros((2, 3, 4), dtype=np.uint8))
+    imageio.imwrite(images_8_dir / "frame_0002.png", np.zeros((2, 3, 4), dtype=np.uint8))
+
+    (sparse_dir / "cameras.txt").write_text(
+        "# Camera list\n"
+        "1 PINHOLE 12 8 8 8 6 4\n",
+        encoding="utf-8",
+    )
+    (sparse_dir / "images.txt").write_text(
+        "# Image list\n"
+        "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+        "0 0 -1\n"
+        "2 1 0 0 0 0 0 0 1 frame_0002.png\n"
+        "0 0 -1\n",
+        encoding="utf-8",
+    )
+    return scene_root
+
+
 def _cuda_runtime_probe() -> dict[str, object]:
     return {
         "python_executable": "python",
@@ -195,6 +224,27 @@ class TestAdapterValidation:
         assert f"datadir = {captured['env']['NVS_DATASET_ROOT']}" in config_text
         assert result.checkpoint_path.endswith("checkpoint.tar")
 
+    def test_nerf_static_quick_prefers_mipnerf360_images_8(self, tmp_path):
+        """Quick preset should convert Mip-NeRF 360 from reduced mip images to avoid huge RAM spikes."""
+        adapter = NeRFStaticAdapter()
+        scene_root = _build_colmap_scene_with_mips(tmp_path / "mipnerf360" / "garden")
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="mipnerf360", root=str(scene_root)),
+            method="nerf_static",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "quick"},
+        )
+
+        prepared_root = adapter._resolve_dataset_root(
+            config,
+            Path(config.output_dir) / config.run_id / adapter.method_id,
+        )
+
+        assert imageio.imread(prepared_root / "images" / "frame_0001.png").shape[:2] == (2, 3)
+
     @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
     def test_nerf_dynamic_prepares_real_scene_with_time_metadata(self, tmp_path, dataset_name):
         """D-NeRF should convert real static scenes to Blender-style frames with synthetic time=0."""
@@ -221,6 +271,31 @@ class TestAdapterValidation:
 
         assert train_payload["frames"][0]["time"] == 0.0
         assert test_payload["frames"][0]["time"] == 0.0
+
+    def test_nerf_dynamic_quick_downscales_tanks_and_temples(self, tmp_path):
+        """Quick preset should cap Tanks and Temples images during conversion."""
+        adapter = NeRFDynamicAdapter()
+        scene_root = _build_colmap_scene(tmp_path / "tanks_and_temples" / "truck")
+        imageio.imwrite(scene_root / "images" / "frame_0001.png", np.zeros((1200, 2000, 4), dtype=np.uint8))
+        imageio.imwrite(scene_root / "images" / "frame_0002.png", np.zeros((1200, 2000, 4), dtype=np.uint8))
+
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="tanks_and_temples", root=str(scene_root)),
+            method="nerf_dynamic",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "quick"},
+        )
+
+        prepared_root = adapter._resolve_dataset_root(
+            config,
+            Path(config.output_dir) / config.run_id / adapter.method_id,
+        )
+
+        height, width = imageio.imread(prepared_root / "images" / "frame_0001.png").shape[:2]
+        assert max(height, width) <= 960
 
     @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
     def test_gs_static_accepts_real_scenes(self, tmp_path, monkeypatch, dataset_name):

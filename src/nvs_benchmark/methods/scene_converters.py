@@ -22,6 +22,34 @@ def find_images(directory: Path) -> list[Path]:
     return sorted(files)
 
 
+def preferred_real_image_subdirs(
+    *,
+    dataset_name: str,
+    preset_name: str | None,
+) -> tuple[str, ...]:
+    preset = (preset_name or "").strip().lower()
+    if dataset_name == "mipnerf360":
+        if preset in {"smoke", "quick", "preview"}:
+            return ("images_8", "images_4", "images_2", "images")
+        return ("images_4", "images_2", "images_8", "images")
+    return ("images",)
+
+
+def preferred_real_max_image_dim(
+    *,
+    dataset_name: str,
+    preset_name: str | None,
+) -> int | None:
+    preset = (preset_name or "").strip().lower()
+    if dataset_name == "mipnerf360":
+        return None
+    if dataset_name == "tanks_and_temples":
+        if preset in {"smoke", "quick", "preview"}:
+            return 960
+        return 1280
+    return None
+
+
 def has_required_blender_splits(root: Path) -> bool:
     return all((root / split_file).exists() for split_file in REQUIRED_BLENDER_SPLITS)
 
@@ -88,26 +116,36 @@ def _read_colmap_intrinsics_text(path: Path) -> dict[int, dict[str, object]]:
     return cameras
 
 
-def _resolve_colmap_image_path(scene_root: Path, image_name: str) -> Path | None:
-    candidates = [
-        scene_root / "images" / image_name,
-        scene_root / "images" / Path(image_name).name,
-        scene_root / "images" / f"{Path(image_name).stem}.png",
-        scene_root / "images" / f"{Path(image_name).stem}.jpg",
-        scene_root / "images" / f"{Path(image_name).stem}.jpeg",
-        scene_root / image_name,
-        scene_root / Path(image_name).name,
-        scene_root / f"{Path(image_name).stem}.png",
-        scene_root / f"{Path(image_name).stem}.jpg",
-        scene_root / f"{Path(image_name).stem}.jpeg",
-    ]
+def _resolve_colmap_image_path(
+    scene_root: Path,
+    image_name: str,
+    preferred_subdirs: tuple[str, ...] | None = None,
+) -> Path | None:
+    search_roots: list[Path] = []
+    for subdir in preferred_subdirs or ("images",):
+        candidate_root = scene_root / subdir
+        if candidate_root.exists():
+            search_roots.append(candidate_root)
+    search_roots.extend([scene_root / "images", scene_root])
+
+    candidates: list[Path] = []
+    for root in search_roots:
+        candidates.extend(
+            [
+                root / image_name,
+                root / Path(image_name).name,
+                root / f"{Path(image_name).stem}.png",
+                root / f"{Path(image_name).stem}.jpg",
+                root / f"{Path(image_name).stem}.jpeg",
+            ]
+        )
     for candidate in candidates:
         if candidate.exists():
             return candidate
     return None
 
 
-def _save_rgba_png(source_path: Path, target_path: Path) -> None:
+def _save_rgba_png(source_path: Path, target_path: Path, *, max_image_dim: int | None = None) -> None:
     image = imageio.imread(source_path)
     if image.ndim == 2:
         image = np.repeat(image[:, :, None], 3, axis=2)
@@ -127,6 +165,17 @@ def _save_rgba_png(source_path: Path, target_path: Path) -> None:
             image = np.clip(image, 0, 255)
         image = image.astype(np.uint8)
 
+    if max_image_dim is not None:
+        height, width = image.shape[:2]
+        longest_edge = max(height, width)
+        if longest_edge > max_image_dim:
+            import cv2
+
+            scale = float(max_image_dim) / float(longest_edge)
+            resized_width = max(1, int(round(width * scale)))
+            resized_height = max(1, int(round(height * scale)))
+            image = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+
     target_path.parent.mkdir(parents=True, exist_ok=True)
     imageio.imwrite(target_path, image)
 
@@ -137,10 +186,26 @@ def prepare_colmap_scene_to_blender(
     prepared_root: Path,
     holdout_stride: int,
     include_time_metadata: bool = False,
+    preferred_image_subdirs: tuple[str, ...] | None = None,
+    max_image_dim: int | None = None,
 ) -> Path:
     """Converte uma cena COLMAP para o layout Blender esperado pelos backends NeRF."""
-    if has_required_blender_splits(prepared_root):
-        return prepared_root
+    meta_path = prepared_root / "conversion_meta.json"
+    expected_meta = {
+        "source_root": str(source_root.resolve()),
+        "holdout_stride": int(holdout_stride),
+        "include_time_metadata": bool(include_time_metadata),
+        "preferred_image_subdirs": list(preferred_image_subdirs or []),
+        "max_image_dim": int(max_image_dim) if max_image_dim is not None else None,
+    }
+
+    if has_required_blender_splits(prepared_root) and meta_path.exists():
+        try:
+            current_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            current_meta = None
+        if current_meta == expected_meta:
+            return prepared_root
 
     if prepared_root.exists():
         shutil.rmtree(prepared_root)
@@ -191,13 +256,17 @@ def prepare_colmap_scene_to_blender(
         if model not in {"PINHOLE", "SIMPLE_PINHOLE"}:
             raise ValueError(f"Modelo de camera COLMAP nao suportado para conversao NeRF: {model}.")
 
-        source_image = _resolve_colmap_image_path(source_root, extrinsic.name)
+        source_image = _resolve_colmap_image_path(
+            source_root,
+            extrinsic.name,
+            preferred_subdirs=preferred_image_subdirs,
+        )
         if source_image is None:
             raise ValueError(f"Imagem nao encontrada para COLMAP frame: {extrinsic.name}")
 
         target_stem = Path(extrinsic.name).stem
         target_image = prepared_root / "images" / f"{target_stem}.png"
-        _save_rgba_png(source_image, target_image)
+        _save_rgba_png(source_image, target_image, max_image_dim=max_image_dim)
 
         w2c = np.eye(4, dtype=np.float64)
         w2c[:3, :3] = loader.qvec2rotmat(extrinsic.qvec)
@@ -243,4 +312,5 @@ def prepare_colmap_scene_to_blender(
         json.dumps({**payload_base, "frames": test_frames}, indent=2),
         encoding="utf-8",
     )
+    meta_path.write_text(json.dumps(expected_meta, indent=2), encoding="utf-8")
     return prepared_root

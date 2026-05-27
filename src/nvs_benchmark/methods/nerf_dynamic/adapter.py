@@ -31,6 +31,8 @@ from nvs_benchmark.methods.scene_converters import (
     has_real_scene_layout,
     has_required_blender_splits,
     prepare_colmap_scene_to_blender,
+    preferred_real_image_subdirs,
+    preferred_real_max_image_dim,
 )
 
 
@@ -267,6 +269,18 @@ class NeRFDynamicAdapter:
             prepared_root=prepared_root,
             holdout_stride=max(2, int(config.extra.get("nerf_llffhold", 8))),
             include_time_metadata=True,
+            preferred_image_subdirs=preferred_real_image_subdirs(
+                dataset_name=config.dataset.name,
+                preset_name=str(config.extra.get("preset", "")),
+            ),
+            max_image_dim=(
+                int(config.extra["nerf_real_scene_max_dim"])
+                if config.extra.get("nerf_real_scene_max_dim") is not None
+                else preferred_real_max_image_dim(
+                    dataset_name=config.dataset.name,
+                    preset_name=str(config.extra.get("preset", "")),
+                )
+            ),
         )
 
     def _generate_config_file(
