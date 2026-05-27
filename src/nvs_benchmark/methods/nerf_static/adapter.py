@@ -311,6 +311,8 @@ class NeRFStaticAdapter:
         precrop_iters = int(config.extra.get("nerf_precrop_iters", 0))
         precrop_frac = float(config.extra.get("nerf_precrop_frac", 0.5))
         half_res = bool(config.extra.get("nerf_half_res", not high_vram))
+        if config.dataset.name in {"mipnerf360", "tanks_and_temples"}:
+            half_res = bool(config.extra.get("nerf_force_half_res_after_prepare", False))
 
         lines = [
             f"expname = {exp_name}",

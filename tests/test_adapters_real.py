@@ -247,6 +247,34 @@ class TestAdapterValidation:
 
         assert imageio.imread(prepared_root / "images" / "frame_0001.png").shape[:2] == (2, 3)
 
+    def test_nerf_static_disables_dnerf_half_res_for_real_scenes(self, tmp_path):
+        """Prepared real scenes should not trigger D-NeRF's broken half_res resize path by default."""
+        adapter = NeRFStaticAdapter()
+        scene_root = _build_colmap_scene(tmp_path / "mipnerf360" / "garden")
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="mipnerf360", root=str(scene_root)),
+            method="nerf_static",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "quick", "nerf_half_res": True},
+        )
+
+        prepared_root = adapter._resolve_dataset_root(
+            config,
+            Path(config.output_dir) / config.run_id / adapter.method_id,
+        )
+        config_path = adapter._generate_config_file(
+            config,
+            logs_dir=Path(config.output_dir) / config.run_id / adapter.method_id / "logs",
+            iter_params={"N_iter": 1000},
+            dataset_root=prepared_root,
+        )
+
+        config_text = config_path.read_text(encoding="utf-8")
+        assert "half_res = False" in config_text
+
     @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
     def test_nerf_dynamic_prepares_real_scene_with_time_metadata(self, tmp_path, dataset_name):
         """D-NeRF should convert real static scenes to Blender-style frames with synthetic time=0."""

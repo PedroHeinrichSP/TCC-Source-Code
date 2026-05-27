@@ -53,21 +53,71 @@ def _download_with_progress(url: str, destination: Path) -> Path:
         return destination
 
     print(f"[download] {url}")
-    with urllib.request.urlopen(url) as response, destination.open("wb") as out:
-        total = int(response.headers.get("Content-Length", "0") or "0")
-        downloaded = 0
-        while True:
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            downloaded += len(chunk)
-            if total > 0:
-                print(f"\r    {downloaded / (1024 * 1024):.0f} / {total / (1024 * 1024):.0f} MB", end="", flush=True)
-            else:
-                print(f"\r    {downloaded / (1024 * 1024):.0f} MB", end="", flush=True)
-    print()
-    return destination
+    try:
+        with urllib.request.urlopen(url) as response, destination.open("wb") as out:
+            total = int(response.headers.get("Content-Length", "0") or "0")
+            downloaded = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                downloaded += len(chunk)
+                if total > 0:
+                    print(
+                        f"\r    {downloaded / (1024 * 1024):.0f} / {total / (1024 * 1024):.0f} MB",
+                        end="",
+                        flush=True,
+                    )
+                else:
+                    print(f"\r    {downloaded / (1024 * 1024):.0f} MB", end="", flush=True)
+        print()
+        return destination
+    except Exception as exc:
+        print()
+        print(f"[warn] urllib falhou ao baixar {url}: {type(exc).__name__}: {exc}")
+        _safe_unlink(destination)
+
+    fallback_errors: list[str] = []
+
+    if sys.platform.startswith("win"):
+        ps_command = (
+            "$ProgressPreference='SilentlyContinue'; "
+            f"Invoke-WebRequest -Uri '{url}' -OutFile '{destination}' -UseBasicParsing"
+        )
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_command],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if completed.returncode == 0 and destination.exists() and destination.stat().st_size > 0:
+            print("[ok] download concluido via PowerShell.")
+            return destination
+        fallback_errors.append(
+            f"powershell exit={completed.returncode}: {(completed.stderr or completed.stdout or '').strip()[:400]}"
+        )
+
+    completed = subprocess.run(
+        ["curl", "-L", url, "-o", str(destination)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode == 0 and destination.exists() and destination.stat().st_size > 0:
+        print("[ok] download concluido via curl.")
+        return destination
+    fallback_errors.append(
+        f"curl exit={completed.returncode}: {(completed.stderr or completed.stdout or '').strip()[:400]}"
+    )
+    _safe_unlink(destination)
+
+    details = " | ".join(error for error in fallback_errors if error)
+    raise RuntimeError(
+        "Falha ao baixar Tanks and Temples por HTTPS. "
+        "O ambiente pode estar bloqueando urllib/TLS. "
+        f"Tentativas de fallback: {details}"
+    )
 
 
 def _safe_rmtree(path: Path) -> None:
