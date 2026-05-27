@@ -102,6 +102,26 @@ def _tanks_and_temples_has_scene_content(path: Path) -> bool:
     return False
 
 
+def _mipnerf360_has_scene_content(path: Path) -> bool:
+    """Detecta se Mip-NeRF 360 tem ao menos uma cena extraida utilizavel."""
+    image_suffixes = (".png", ".jpg", ".jpeg", ".webp", ".PNG", ".JPG", ".JPEG", ".WEBP")
+
+    try:
+        scene_dirs = [candidate for candidate in path.iterdir() if candidate.is_dir()]
+    except OSError:
+        return True
+
+    for scene_dir in scene_dirs:
+        if (scene_dir / "poses_bounds.npy").exists() or (scene_dir / "sparse" / "0").exists():
+            return True
+        try:
+            if any(candidate.is_file() and candidate.suffix in image_suffixes for candidate in scene_dir.rglob("*")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _is_installed(item: InstallItem) -> bool:
     path_value = item.path
     if not path_value:
@@ -112,6 +132,8 @@ def _is_installed(item: InstallItem) -> bool:
     if path.is_file():
         return True
     if path.is_dir():
+        if item.item_id == "mipnerf360":
+            return _mipnerf360_has_scene_content(path)
         if item.item_id == "tanks_and_temples":
             return _tanks_and_temples_has_scene_content(path)
         try:
@@ -306,7 +328,7 @@ def install_item_by_id(
         return [f"[error] item not found: {item_id}"]
 
     item = matches[0]
-    if _is_installed(item.path):
+    if _is_installed(item):
         return [f"[skip] {item.label}: already exists at {item.path}"]
 
     command = _suggest_command(item)

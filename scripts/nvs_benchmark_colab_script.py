@@ -289,6 +289,8 @@ def discover_available_datasets(search_roots: list[Path]) -> dict[str, str]:
         candidates = discover_dataset_candidates(search_roots, dataset_id)
         if len(candidates) == 1:
             discovered[dataset_id] = str(candidates[0])
+        elif candidates and dataset_id in {"mipnerf360", "tanks_and_temples"}:
+            discovered[dataset_id] = str(normalize_dataset_path(choose_preferred_candidate(dataset_id, candidates)))
     return discovered
 
 
@@ -859,6 +861,9 @@ else:
         print(f"Foram encontrados {len(candidate_roots)} candidatos para {SELECTED_DATASET}:")
         for candidate in candidate_roots:
             print(f"  - {candidate}")
+        if SELECTED_DATASET in {"mipnerf360", "tanks_and_temples"}:
+            dataset_root = normalize_dataset_path(choose_preferred_candidate(SELECTED_DATASET, candidate_roots))
+            print(f"Dataset {SELECTED_DATASET} selecionado automaticamente: {dataset_root}")
 
 if dataset_root is None and INSTALL_DATASET_IF_MISSING:
     if not CATALOG_FILE.exists():
@@ -902,17 +907,24 @@ if dataset_root is None or not dataset_root.exists():
     if SELECTED_DATASET in MANUAL_DATASET_IDS:
         prepared_root = (PROJECT_ROOT / "data" / SELECTED_DATASET).resolve()
         image_sets_dir = prepared_root / "image_sets"
-        print(f"Tanks and Temples foi baixado em: {prepared_root}")
-        if image_sets_dir.exists():
-            scene_candidates = [candidate.resolve() for candidate in sorted(image_sets_dir.iterdir()) if candidate.is_dir()]
-            if scene_candidates:
-                print("Cenas encontradas:")
-                for candidate in scene_candidates:
-                    print(f"  - {candidate}")
-        print("Selecione uma cena em SELECTED_DATASET_ROOT antes de rodar a validacao/benchmark.")
-        SELECTED_DATASET_ROOT = str(prepared_root)
-        save_state(SELECTED_DATASET_ROOT)
-        print("Dataset preparado.")
+        video_sets_dir = prepared_root / "videos"
+        scene_candidates = discover_dataset_candidates(
+            [prepared_root, image_sets_dir, video_sets_dir],
+            SELECTED_DATASET,
+        )
+        if scene_candidates:
+            dataset_root = normalize_dataset_path(choose_preferred_candidate(SELECTED_DATASET, scene_candidates))
+            SELECTED_DATASET_ROOT = str(dataset_root)
+            save_state(SELECTED_DATASET_ROOT)
+            print(f"Cena Tanks and Temples encontrada: {SELECTED_DATASET_ROOT}")
+            print("Dataset preparado.")
+        else:
+            print("Tanks and Temples nao foi encontrado em uma cena extraida valida.")
+            print(f"Diretorio esperado: {prepared_root}")
+            print("Baixe/extrai manualmente em image_sets/<cena> ou videos/<cena> e defina SELECTED_DATASET_ROOT para a cena desejada.")
+            raise FileNotFoundError(
+                "Nenhuma cena valida de Tanks and Temples foi encontrada. O download automatico pode exigir autenticacao no site oficial."
+            )
     else:
         raise FileNotFoundError(
             f"Nao foi possivel resolver a raiz do dataset {SELECTED_DATASET}. Informe SELECTED_DATASET_ROOT ou ative INSTALL_DATASET_IF_MISSING=True."
