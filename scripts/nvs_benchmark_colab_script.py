@@ -175,6 +175,8 @@ def _wrap_windows_msvc_env(cmd: list[object]) -> list[str]:
                 "@echo off",
                 f'call "{vcvars_path}" >nul',
                 "if errorlevel 1 exit /b %errorlevel%",
+                "set DISTUTILS_USE_SDK=1",
+                "set MSSdk=1",
                 rendered_cmd,
             ]
         )
