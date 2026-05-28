@@ -106,6 +106,68 @@ def run_logged(cmd, label: str, check: bool = True, cwd: Optional[Path | str] = 
     return result
 
 
+def _tail_text(text: str, max_lines: int = 25) -> str:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+    return "\n".join(lines[-max_lines:])
+
+
+def _gaussian_build_preflight(label: str, path: Path) -> None:
+    notes: list[str] = [f"package_path={path.resolve()}"]
+    issues: list[str] = []
+
+    try:
+        import torch
+    except Exception as exc:
+        issues.append(
+            "PyTorch nao esta importavel no interpretador atual. "
+            f"Instale/ative o torch correto antes de compilar {label}. Detalhe: {exc!r}"
+        )
+    else:
+        notes.append(f"torch={torch.__version__}")
+        notes.append(f"torch.version.cuda={getattr(torch.version, 'cuda', None)}")
+        notes.append(f"torch.cuda.is_available()={torch.cuda.is_available()}")
+        if not getattr(torch.version, "cuda", None):
+            issues.append(
+                "O PyTorch atual nao tem suporte CUDA. "
+                "As extensoes do Gaussian Splatting exigem uma build CUDA do torch."
+            )
+        try:
+            from torch.utils.cpp_extension import CUDA_HOME
+        except Exception as exc:
+            CUDA_HOME = None
+            issues.append(f"Nao foi possivel consultar torch.utils.cpp_extension.CUDA_HOME: {exc!r}")
+        notes.append(f"CUDA_HOME={CUDA_HOME or 'nao detectado'}")
+
+    nvcc_path = shutil.which("nvcc")
+    notes.append(f"nvcc={nvcc_path or 'nao encontrado no PATH'}")
+    if nvcc_path is None:
+        issues.append(
+            "CUDA toolkit local nao foi detectado via nvcc. "
+            "Instale o toolkit e garanta CUDA_HOME/PATH apontando para ele."
+        )
+
+    if os.name == "nt":
+        cl_path = shutil.which("cl")
+        notes.append(f"cl.exe={cl_path or 'nao encontrado no PATH'}")
+        if cl_path is None:
+            issues.append(
+                "Microsoft C++ Build Tools nao encontrado no PATH (cl.exe). "
+                "No Windows, a compilacao dessas extensoes depende do MSVC."
+            )
+
+    print(f"[preflight:{label}]")
+    for note in notes:
+        print(f"  - {note}")
+
+    if issues:
+        raise RuntimeError(
+            f"Ambiente incompativel para compilar {label}.\n"
+            + "\n".join(f"- {issue}" for issue in issues)
+        )
+
+
 
 def extract_zip_artifacts(zip_path: str, extract_to: str) -> tuple[str, str]:
     extract_path = Path(extract_to)
@@ -617,6 +679,16 @@ def resolve_saved_scene_root(dataset_id: str, root_value: str) -> str:
 
 
 # ---- cell ----
+def _existing_splits(root: Path) -> list[str]:
+    splits: list[str] = []
+    for split_name in ("train", "val", "test"):
+        transforms_path = root / f"transforms_{split_name}.json"
+        if transforms_path.exists():
+            splits.append(split_name)
+    return splits
+
+
+
 def _is_tanks_and_temples_scene_root(candidate: Path) -> bool:
     if not candidate.exists() or not candidate.is_dir():
         return False
@@ -772,9 +844,41 @@ def install_extension(label: str, path: Path) -> None:
         init_file = package_dir / "__init__.py"
         if not init_file.exists():
             init_file.write_text("", encoding="utf-8")
-    run_logged(
-        [sys.executable, "-m", "pip", "install", "--no-build-isolation", "-e", str(path)],
-        label=f"install-{label}",
+    _gaussian_build_preflight(label, path)
+
+    attempts = [
+        (
+            "pip-editable",
+            [sys.executable, "-m", "pip", "install", "--no-build-isolation", "-e", str(path)],
+            None,
+        ),
+        (
+            "pip-editable-legacy",
+            [sys.executable, "-m", "pip", "install", "--no-build-isolation", "--no-use-pep517", "-e", str(path)],
+            None,
+        ),
+        (
+            "setup.py-develop",
+            [sys.executable, "setup.py", "develop"],
+            path,
+        ),
+    ]
+    failures: list[str] = []
+    for attempt_label, cmd, attempt_cwd in attempts:
+        result = run_logged(cmd, label=f"install-{label}-{attempt_label}", check=False, cwd=attempt_cwd)
+        if result.returncode == 0:
+            print(f"[ok] {label} instalado via {attempt_label}")
+            return
+        tail = _tail_text(result.stderr or result.stdout)
+        if tail:
+            failures.append(f"[{attempt_label}]\n{tail}")
+        else:
+            failures.append(f"[{attempt_label}] sem stderr/stdout util; returncode={result.returncode}")
+
+    raise RuntimeError(
+        f"Falha ao instalar {label} apos {len(attempts)} tentativas.\n"
+        + "\n\n".join(failures)
+        + "\n\nVerifique principalmente: torch com CUDA, CUDA toolkit (nvcc/CUDA_HOME) e MSVC Build Tools no Windows."
     )
 
 
