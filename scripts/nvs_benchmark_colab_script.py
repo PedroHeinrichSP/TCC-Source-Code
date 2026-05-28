@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -86,6 +87,16 @@ def generate_run_id(environment: str, preset: str, method: str, dataset: str) ->
     return f"{environment}_{preset}_{method}_{dataset_clean}_{stamp}"
 
 
+def ensure_run_id() -> str:
+    current = globals().get("RUN_ID")
+    if current:
+        return str(current)
+    generated = generate_run_id(ENVIRONMENT, SELECTED_PRESET, SELECTED_METHOD, SELECTED_DATASET)
+    globals()["RUN_ID"] = generated
+    print(f"[info] RUN_ID nao estava definido; gerado automaticamente: {generated}")
+    return generated
+
+
 
 def run_logged(cmd, label: str, check: bool = True, cwd: Optional[Path | str] = None):
     print("\n" + "=" * 70)
@@ -155,8 +166,22 @@ def _wrap_windows_msvc_env(cmd: list[object]) -> list[str]:
         return [str(part) for part in cmd]
 
     rendered_cmd = subprocess.list2cmdline([str(part) for part in cmd])
-    chained_cmd = f'call "{vcvars_path}" >nul && {rendered_cmd}'
-    return ["cmd", "/d", "/s", "/c", chained_cmd]
+    temp_dir = Path(tempfile.gettempdir()) / "nvs_benchmark_msvc"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    script_path = temp_dir / f"run_msvc_{os.getpid()}_{int(time.time() * 1000)}.bat"
+    script_path.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                f'call "{vcvars_path}" >nul',
+                "if errorlevel 1 exit /b %errorlevel%",
+                rendered_cmd,
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return ["cmd", "/d", "/c", str(script_path)]
 
 
 def _gaussian_build_preflight(label: str, path: Path) -> None:
@@ -1128,6 +1153,7 @@ print("=" * 70)
 
 Path("./artifacts/metrics").mkdir(parents=True, exist_ok=True)
 Path("./logs").mkdir(parents=True, exist_ok=True)
+RUN_ID = ensure_run_id()
 snapshot_file = Path("./artifacts/metrics") / f"{RUN_ID}.json"
 
 metrics_only_mode = bool(SKIP_TRAINING and UPLOADED_CHECKPOINT and UPLOADED_RENDERS_DIR)
@@ -1247,6 +1273,7 @@ if RUN_MODE == "quick_check" and not SKIP_TRAINING:
 if snapshot_file is None:
     raise RuntimeError("snapshot_file nao foi definido. Execute a celula de benchmark antes desta.")
 
+RUN_ID = ensure_run_id()
 report_name = f"{RUN_ID}_{SELECTED_METHOD}_{SELECTED_DATASET}_report"
 cmd = [
     sys.executable,
@@ -1293,6 +1320,7 @@ import shutil
 
 archive_dir = Path("./notebooks/artifacts/archives")
 archive_dir.mkdir(parents=True, exist_ok=True)
+RUN_ID = ensure_run_id()
 archive_base = archive_dir / f"{RUN_ID}_artifacts"
 archive_file = shutil.make_archive(str(archive_base), "zip", "./artifacts")
 print(f"ZIP gerado: {Path(archive_file).resolve()}")
