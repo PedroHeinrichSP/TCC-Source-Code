@@ -113,6 +113,52 @@ def _tail_text(text: str, max_lines: int = 25) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _find_vcvars64_bat() -> Optional[Path]:
+    if os.name != "nt":
+        return None
+
+    search_roots = [
+        os.environ.get("VSINSTALLDIR"),
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+    ]
+    relative_candidates = [
+        Path("Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2019/Professional/VC/Auxiliary/Build/vcvars64.bat"),
+        Path("Microsoft Visual Studio/2019/Enterprise/VC/Auxiliary/Build/vcvars64.bat"),
+    ]
+    for root in search_roots:
+        if not root:
+            continue
+        root_path = Path(root)
+        direct_candidate = root_path / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+        if direct_candidate.exists():
+            return direct_candidate
+        for relative_path in relative_candidates:
+            candidate = root_path / relative_path
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _wrap_windows_msvc_env(cmd: list[object]) -> list[str]:
+    if os.name != "nt" or shutil.which("cl"):
+        return [str(part) for part in cmd]
+
+    vcvars_path = _find_vcvars64_bat()
+    if vcvars_path is None:
+        return [str(part) for part in cmd]
+
+    rendered_cmd = subprocess.list2cmdline([str(part) for part in cmd])
+    chained_cmd = f'call "{vcvars_path}" >nul && {rendered_cmd}'
+    return ["cmd", "/d", "/s", "/c", chained_cmd]
+
+
 def _gaussian_build_preflight(label: str, path: Path) -> None:
     notes: list[str] = [f"package_path={path.resolve()}"]
     issues: list[str] = []
@@ -150,10 +196,12 @@ def _gaussian_build_preflight(label: str, path: Path) -> None:
 
     if os.name == "nt":
         cl_path = shutil.which("cl")
+        vcvars_path = _find_vcvars64_bat()
         notes.append(f"cl.exe={cl_path or 'nao encontrado no PATH'}")
-        if cl_path is None:
+        notes.append(f"vcvars64.bat={str(vcvars_path) if vcvars_path else 'nao encontrado'}")
+        if cl_path is None and vcvars_path is None:
             issues.append(
-                "Microsoft C++ Build Tools nao encontrado no PATH (cl.exe). "
+                "Microsoft C++ Build Tools nao encontrado no PATH (cl.exe) e vcvars64.bat nao foi localizado. "
                 "No Windows, a compilacao dessas extensoes depende do MSVC."
             )
 
@@ -865,7 +913,8 @@ def install_extension(label: str, path: Path) -> None:
     ]
     failures: list[str] = []
     for attempt_label, cmd, attempt_cwd in attempts:
-        result = run_logged(cmd, label=f"install-{label}-{attempt_label}", check=False, cwd=attempt_cwd)
+        effective_cmd = _wrap_windows_msvc_env(cmd)
+        result = run_logged(effective_cmd, label=f"install-{label}-{attempt_label}", check=False, cwd=attempt_cwd)
         if result.returncode == 0:
             print(f"[ok] {label} instalado via {attempt_label}")
             return
