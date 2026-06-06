@@ -3,8 +3,10 @@
 import argparse
 import json
 import math
+import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from nvs_benchmark.core import DatasetSpec, HardwareProfile, RunConfig
@@ -50,6 +52,26 @@ def _resolve_smoke_dataset_spec() -> DatasetSpec:
 def _is_hardware_skip(method_id: str, exc: Exception) -> bool:
     """Retorna True quando a falha deve virar skip por hardware incompatível."""
     return method_id == "gs_static" and isinstance(exc, GSStaticHardwareError)
+
+
+def _sanitize_run_token(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", value.strip())
+    normalized = normalized.strip("_-")
+    return normalized or "run"
+
+
+def _build_cli_run_id(*, method_id: str, dataset: str, root: str) -> str:
+    scene_name = Path(root).name or dataset
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return "-".join(
+        [
+            "custom",
+            _sanitize_run_token(method_id),
+            _sanitize_run_token(dataset),
+            _sanitize_run_token(scene_name),
+            stamp,
+        ]
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1138,8 +1160,10 @@ def run_method_run(
                     print(f"Iteracoes ajustadas (conservador): {estimate.get('adjusted_iterations')}")
                 print()
         dataset_spec = load_dataset(dataset_name=dataset, root=root, split=split)
+        run_id = _build_cli_run_id(method_id=method_id, dataset=dataset, root=root)
+        print(f"Run ID resolvido: {run_id}")
         config = RunConfig(
-            run_id=str(run_id).strip() if run_id else f"custom-{method_id}",
+            run_id=run_id,
             dataset=dataset_spec,
             method=method_id,
             output_dir=output_dir,
