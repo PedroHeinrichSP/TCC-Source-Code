@@ -10,7 +10,6 @@ import json
 import os
 import shlex
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +33,7 @@ from nvs_benchmark.methods.scene_converters import (
     preferred_real_image_subdirs,
     preferred_real_max_image_dim,
 )
+from nvs_benchmark.methods.subprocess_utils import format_subprocess_error, run_subprocess_streaming
 
 
 def _find_images(directory: Path) -> list[Path]:
@@ -305,9 +305,9 @@ class NeRFDynamicAdapter:
         vram_gb = hardware.get("vram_gb")
         high_vram = has_gpu and isinstance(vram_gb, (int, float)) and float(vram_gb) >= 8.0
 
-        n_samples = int(config.extra.get("nerf_n_samples", 128 if high_vram else 64))
-        n_importance = int(config.extra.get("nerf_n_importance", 128))
-        n_rand = int(config.extra.get("nerf_n_rand", 1024 if high_vram else 500))
+        n_samples = int(config.extra.get("nerf_n_samples", iter_params.get("nerf_n_samples", 128 if high_vram else 64)))
+        n_importance = int(config.extra.get("nerf_n_importance", iter_params.get("nerf_n_importance", 128)))
+        n_rand = int(config.extra.get("nerf_n_rand", iter_params.get("nerf_n_rand", 1024 if high_vram else 500)))
         half_res = bool(config.extra.get("nerf_half_res", not high_vram))
         if config.dataset.name in {"mipnerf360", "tanks_and_temples"}:
             half_res = bool(config.extra.get("nerf_force_half_res_after_prepare", False))
@@ -414,25 +414,17 @@ class NeRFDynamicAdapter:
     def _run_command(self, command: list[str], cwd: Path, env: dict[str, str], stage: str) -> None:
         """Executa comando subprocess com tratamento de erro."""
         print(f"[{self.method_id}] Executando {stage}: {' '.join(command[:4])}...")
-        completed = subprocess.run(
+        completed = run_subprocess_streaming(
             command,
-            cwd=str(cwd),
+            cwd=cwd,
             env=env,
-            capture_output=True,
-            text=False,
-            check=False,
         )
-        stdout_text = completed.stdout.decode("utf-8", errors="replace") if completed.stdout else ""
-        stderr_text = completed.stderr.decode("utf-8", errors="replace") if completed.stderr else ""
-        if completed.returncode != 0:
-            stdout = stdout_text[-4000:] if stdout_text else ""
-            stderr = stderr_text[-4000:] if stderr_text else ""
+        if not completed.success:
             raise RuntimeError(
                 f"Falha em {self.method_id}::{stage} (exit={completed.returncode}).\n"
                 f"Comando: {' '.join(command)}\n"
                 f"CWD: {cwd}\n"
-                f"STDOUT:\n{stdout}\n"
-                f"STDERR:\n{stderr}"
+                f"{format_subprocess_error(completed)}"
             )
 
     def _find_latest_checkpoint(self, logs_dir: Path) -> Path | None:

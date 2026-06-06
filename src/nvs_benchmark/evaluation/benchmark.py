@@ -39,9 +39,18 @@ def evaluate_benchmark_metrics(
     train_seconds: float,
     inference_seconds: float,
     frame_times_ms: list[float] | None = None,
+    max_pairs: int | None = None,
+    max_image_dim: int | None = None,
+    log_every: int | None = None,
 ) -> BenchmarkMetrics:
     """Evaluate quality and performance metrics for a method."""
-    quality = evaluate_quality_metrics(pred_dir=pred_dir, ref_dir=ref_dir)
+    quality = evaluate_quality_metrics(
+        pred_dir=pred_dir,
+        ref_dir=ref_dir,
+        max_pairs=max_pairs,
+        max_image_dim=max_image_dim,
+        log_every=log_every,
+    )
     perf: RuntimePerformance = collect_runtime_performance(
         frames=frames,
         train_seconds=train_seconds,

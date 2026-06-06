@@ -1,4 +1,4 @@
-"""Interface de linha de comando para operações do benchmark NVS."""
+﻿"""Interface de linha de comando para operações do benchmark NVS."""
 
 import argparse
 import json
@@ -12,8 +12,9 @@ from nvs_benchmark.core import Orchestrator
 from nvs_benchmark.core import InferenceRequest, TrainRequest
 from nvs_benchmark.core.presets import PRESET_NAMES, list_preset_summaries
 from nvs_benchmark.data import SUPPORTED_DATASETS, load_dataset, validate_dataset
-from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot, evaluate_benchmark_metrics
+from nvs_benchmark.evaluation import BenchmarkMetrics, save_metrics_snapshot, evaluate_benchmark_metrics, write_reference_image
 from nvs_benchmark.methods import ExternalMethodAdapter, build_registry_with_all_methods
+from nvs_benchmark.methods.utils import export_reference_frames_from_dataset
 from nvs_benchmark.methods.gs_static.adapter import GSStaticHardwareError
 from nvs_benchmark.reporting import generate_comparison_reports
 from nvs_benchmark.runtime import RunLogger, audit_docstrings, save_doc_audit_report
@@ -125,6 +126,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Numero minimo de pares validos exigidos",
     )
+    metrics_compute_parser.add_argument(
+        "--metrics-max-pairs",
+        type=int,
+        default=None,
+        help="Limita a quantidade de pares avaliados durante a etapa de metricas",
+    )
+    metrics_compute_parser.add_argument(
+        "--metrics-max-image-dim",
+        type=int,
+        default=None,
+        help="Reduz a maior dimensao das imagens antes de calcular metricas",
+    )
+    metrics_compute_parser.add_argument(
+        "--metrics-log-every",
+        type=int,
+        default=None,
+        help="Emite progresso de metricas a cada N pares",
+    )
 
     report_parser = subparsers.add_parser(
         "report-generate",
@@ -234,6 +253,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     method_parser.add_argument("--method", required=True, help="ID do método (ex: nerf_static, external)")
+    method_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Identificador da execucao para organizar artifacts/run_id/metodo",
+    )
     method_parser.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS, help="Nome do dataset")
     method_parser.add_argument("--root", required=True, help="Diretório raiz do dataset")
     method_parser.add_argument("--split", default="train", help="Split para treino/inferência")
@@ -839,6 +863,9 @@ def run_metrics_compute(
     log_dir: str,
     strict_results: bool,
     min_required_pairs: int,
+    metrics_max_pairs: int | None,
+    metrics_max_image_dim: int | None,
+    metrics_log_every: int | None,
 ) -> int:
     """Recomputa métricas a partir de checkpoint e imagens renderizadas pré-existentes."""
     logger = RunLogger(
@@ -857,6 +884,9 @@ def run_metrics_compute(
             "inference_seconds": inference_seconds,
             "strict_results": strict_results,
             "min_required_pairs": min_required_pairs,
+            "metrics_max_pairs": metrics_max_pairs,
+            "metrics_max_image_dim": metrics_max_image_dim,
+            "metrics_log_every": metrics_log_every,
         },
         log_dir=log_dir,
     )
@@ -884,16 +914,24 @@ def run_metrics_compute(
         if reference_dir:
             ref_path = Path(reference_dir)
         else:
-            # Tentar carregar do dataset
             dataset_spec = load_dataset(dataset_name=dataset, root=root, split=split)
-            # Usar diretório de renders do dataset como referência
-            ref_path = Path(root) / "renders" if (Path(root) / "renders").exists() else rendered_path
+            ref_path = Path("./artifacts") / "metrics" / f"_references_{method}_{dataset_spec.name}_{split}"
+            copied = export_reference_frames_from_dataset(
+                root=dataset_spec.root,
+                split=split,
+                reference_dir=ref_path,
+            )
+            if copied == 0:
+                write_reference_image(ref_path)
 
         if not ref_path.exists():
             raise FileNotFoundError(f"Diretório de referência não encontrado: {ref_path}")
 
         # Computar métricas
-        print(f"\nComputando métricas...")
+        print(
+            f"\nComputando métricas... pairs<={metrics_max_pairs or 'all'} "
+            f"max_dim={metrics_max_image_dim or 'full'} log_every={metrics_log_every or 'auto'}"
+        )
         metric = evaluate_benchmark_metrics(
             method=method,
             pred_dir=rendered_path,
@@ -901,6 +939,9 @@ def run_metrics_compute(
             frames=frames,
             train_seconds=train_seconds,
             inference_seconds=inference_seconds,
+            max_pairs=metrics_max_pairs,
+            max_image_dim=metrics_max_image_dim,
+            log_every=metrics_log_every,
         )
 
         # Validação de métricas
@@ -942,7 +983,7 @@ def run_metrics_compute(
             f"[{method}] PSNR={metric.psnr:.2f} SSIM={metric.ssim:.3f} "
             f"LPIPS={metric.lpips:.3f} FPS={metric.fps:.2f} VRAM={metric.vram_gb:.2f}"
         )
-        print(f"✓ Snapshot salvo em: {snapshot_file}")
+        print(f"Snapshot salvo em: {snapshot_file}")
 
         logger.finish("success")
         print("Métricas computadas com sucesso.")
@@ -998,6 +1039,7 @@ def _validate_real_metrics(metric: BenchmarkMetrics, min_required_pairs: int) ->
 def run_method_run(
     *,
     method_id: str,
+    run_id: str | None,
     dataset: str,
     root: str,
     split: str,
@@ -1027,6 +1069,7 @@ def run_method_run(
         command="method-run",
         parameters={
             "method": method_id,
+            "run_id": run_id,
             "dataset": dataset,
             "root": root,
             "split": split,
@@ -1096,7 +1139,7 @@ def run_method_run(
                 print()
         dataset_spec = load_dataset(dataset_name=dataset, root=root, split=split)
         config = RunConfig(
-            run_id=f"custom-{method_id}",
+            run_id=str(run_id).strip() if run_id else f"custom-{method_id}",
             dataset=dataset_spec,
             method=method_id,
             output_dir=output_dir,
@@ -1665,6 +1708,9 @@ def main() -> int:
             log_dir=args.log_dir,
             strict_results=args.strict_results,
             min_required_pairs=args.min_required_pairs,
+            metrics_max_pairs=args.metrics_max_pairs,
+            metrics_max_image_dim=args.metrics_max_image_dim,
+            metrics_log_every=args.metrics_log_every,
         )
     if args.command == "install":
         return run_install(
@@ -1702,6 +1748,7 @@ def main() -> int:
     if args.command == "method-run":
         return run_method_run(
             method_id=args.method,
+            run_id=args.run_id,
             dataset=args.dataset,
             root=args.root,
             split=args.split,

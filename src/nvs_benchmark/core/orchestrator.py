@@ -62,10 +62,8 @@ class Orchestrator:
     def _resolve_reference_split(config: RunConfig) -> str:
         """Resolve o split de referencia a ser usado nas metricas.
 
-        O split informado no dataset normalmente representa o conjunto usado
-        para treino. Para os adapters reais atuais, a inferencia padrao usa o
-        split de teste; logo, quando o treino ocorre em ``train`` e nao ha
-        override explicito, as referencias tambem devem vir de ``test``.
+        Quando nao ha override explicito, as referencias devem acompanhar o
+        split efetivamente usado na inferencia do metodo.
         """
         explicit = str(config.extra.get("reference_split", "")).strip().lower()
         if explicit:
@@ -79,9 +77,10 @@ class Orchestrator:
         if dynamic_eval_split:
             return dynamic_eval_split
 
-        if config.dataset.split == "train":
-            return "test"
-        return config.dataset.split
+        dataset_split = str(config.dataset.split).strip().lower()
+        if dataset_split:
+            return dataset_split
+        return "test"
 
     @staticmethod
     def _metrics_from_cache_payload(payload: dict[str, Any]) -> BenchmarkMetrics:
@@ -101,6 +100,11 @@ class Orchestrator:
             latency_p99_ms=float(payload["latency_p99_ms"]),
         )
 
+    @staticmethod
+    def _print_stage(stage: str, detail: str | None = None) -> None:
+        suffix = f" | {detail}" if detail else ""
+        print(f"[orchestrator] stage={stage}{suffix}", flush=True)
+
     def run(self, config: RunConfig) -> OrchestratorResult:
         """Executa uma rodada completa de benchmark para um único método.
 
@@ -114,7 +118,9 @@ class Orchestrator:
         - skip_snapshot: pular o salvamento de snapshots
         - skip_reports: pular a construção de relatórios indiferente de report_formats
         """
+        self._print_stage("resolve-method", config.method)
         method = self.registry.get(config.method)
+        self._print_stage("validate-config", f"{config.method} on {config.dataset.name}")
         method.validate_config(config)
         cache_enabled = bool(config.extra.get("cache_enabled", True))
         reuse_renders = bool(config.extra.get("reuse_renders", False))
@@ -124,6 +130,7 @@ class Orchestrator:
         cache_registry = CacheRegistry(output_dir=config.output_dir)
         experiment_manager = ExperimentManager(output_dir=config.output_dir)
 
+        self._print_stage("dataset-fingerprint", config.dataset.split)
         dataset_fingerprint = build_dataset_fingerprint(config.dataset.root, split=config.dataset.split)
         config_digest = self._config_digest(config)
 
@@ -151,9 +158,11 @@ class Orchestrator:
         checkpoint_path = None
         train_seconds = 0.0
         if method.capabilities.supports_train:
+            self._print_stage("train", "starting")
             train_result = method.train(TrainRequest(config=config))
             checkpoint_path = train_result.checkpoint_path
             train_seconds = train_result.train_seconds
+            self._print_stage("train", f"done in {train_seconds:.1f}s")
         else:
             checkpoint_path = config.extra.get("checkpoint_path")
             if not checkpoint_path:
@@ -161,6 +170,7 @@ class Orchestrator:
                     f"Method '{config.method}' does not support training. "
                     "Provide 'checkpoint_path' in RunConfig.extra."
                 )
+            self._print_stage("train", "skipped (checkpoint provided)")
 
         if not method.capabilities.supports_inference:
             raise ValueError(f"Method '{config.method}' does not support inference.")
@@ -175,6 +185,7 @@ class Orchestrator:
             ).hexdigest()
             cached_render_entry = cache_registry.get(render_key)
             if cached_render_entry and cached_render_entry.path:
+                self._print_stage("infer", "cache hit")
                 cached_frames = int(cached_render_entry.metadata.get("frames", 0))
                 infer_result = InferenceResult(
                     method=config.method,
@@ -184,6 +195,7 @@ class Orchestrator:
                 )
 
         if infer_result is None:
+            self._print_stage("infer", "starting")
             infer_result = method.infer(
                 InferenceRequest(
                     config=config,
@@ -191,6 +203,7 @@ class Orchestrator:
                     split=config.dataset.split,
                 )
             )
+            self._print_stage("infer", f"done with {infer_result.frames} frames")
             if cache_enabled and reuse_renders:
                 render_key = hashlib.sha256(
                     (
@@ -221,8 +234,16 @@ class Orchestrator:
         report_paths: list[str] = []
 
         if not config.extra.get("skip_metrics"):
+            self._print_stage("metrics", "preparing references")
+            backend_reference_dir = None
+            if infer_result.logs:
+                backend_reference_dir = infer_result.logs.get("reference_dir")
+
             reference_dir = config.extra.get("reference_dir")
-            if reference_dir:
+            if backend_reference_dir and Path(str(backend_reference_dir)).exists():
+                ref_dir = Path(str(backend_reference_dir))
+                self._print_stage("metrics", f"using backend references from {ref_dir}")
+            elif reference_dir:
                 ref_dir = Path(reference_dir)
             else:
                 ref_dir = Path(config.output_dir) / config.run_id / config.method / "references"
@@ -244,8 +265,19 @@ class Orchestrator:
             cached_metrics = cache_registry.get(metrics_cache_key) if cache_enabled and reuse_metrics else None
 
             if cached_metrics and cached_metrics.payload:
+                self._print_stage("metrics", "cache hit")
                 metrics = self._metrics_from_cache_payload(cached_metrics.payload)
             else:
+                metrics_max_pairs = config.extra.get("metrics_max_pairs")
+                metrics_max_image_dim = config.extra.get("metrics_max_image_dim")
+                metrics_log_every = config.extra.get("metrics_log_every")
+                self._print_stage(
+                    "metrics",
+                    (
+                        f"computing pairs<={metrics_max_pairs or 'all'} "
+                        f"max_dim={metrics_max_image_dim or 'full'}"
+                    ),
+                )
                 metrics = evaluate_benchmark_metrics(
                     method=config.method,
                     pred_dir=infer_result.rendered_dir,
@@ -253,6 +285,9 @@ class Orchestrator:
                     frames=infer_result.frames,
                     train_seconds=train_seconds,
                     inference_seconds=infer_result.inference_seconds,
+                    max_pairs=int(metrics_max_pairs) if metrics_max_pairs is not None else None,
+                    max_image_dim=int(metrics_max_image_dim) if metrics_max_image_dim is not None else None,
+                    log_every=int(metrics_log_every) if metrics_log_every is not None else None,
                 )
                 if cache_enabled and reuse_metrics:
                     cache_registry.put(
@@ -282,17 +317,21 @@ class Orchestrator:
                             },
                         )
                     )
+            self._print_stage("metrics", "done")
 
             if not config.extra.get("skip_snapshot"):
+                self._print_stage("snapshot", "writing")
                 snapshot_path = config.extra.get("snapshot_file") or str(
                     Path(config.output_dir) / "metrics" / f"{config.run_id}.json"
                 )
                 save_metrics_snapshot([metrics], snapshot_path)
                 metrics_path = str(snapshot_path)
+                self._print_stage("snapshot", metrics_path)
 
             want_html = ReportFormat.HTML in config.report_formats
             want_pdf = ReportFormat.PDF in config.report_formats
             if (want_html or want_pdf) and not config.extra.get("skip_reports"):
+                self._print_stage("report", "generating")
                 report_output_dir = config.extra.get("report_output_dir") or str(Path(config.output_dir) / "reports")
                 report_name = config.extra.get("report_name") or "benchmark_report"
                 snapshot_for_report = metrics_path or snapshot_path
@@ -307,6 +346,7 @@ class Orchestrator:
                 report_paths.append(report_result["html_path"])
                 if "pdf_path" in report_result:
                     report_paths.append(report_result["pdf_path"])
+                self._print_stage("report", "done")
 
         if cache_enabled:
             cache_registry.evict_lru(max_size_gb=cache_max_size_gb)

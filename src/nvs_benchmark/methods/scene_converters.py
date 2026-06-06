@@ -12,7 +12,7 @@ import imageio.v2 as imageio
 import numpy as np
 
 REQUIRED_BLENDER_SPLITS = ("transforms_train.json", "transforms_val.json", "transforms_test.json")
-CONVERSION_LAYOUT_VERSION = 2
+CONVERSION_LAYOUT_VERSION = 3
 
 
 def find_images(directory: Path) -> list[Path]:
@@ -30,7 +30,7 @@ def preferred_real_image_subdirs(
 ) -> tuple[str, ...]:
     preset = (preset_name or "").strip().lower()
     if dataset_name == "mipnerf360":
-        if preset in {"smoke", "quick", "preview"}:
+        if preset in {"smoke", "quick", "sweep", "preview"}:
             return ("images_8", "images_4", "images_2", "images")
         return ("images_4", "images_2", "images_8", "images")
     return ("images",)
@@ -45,6 +45,8 @@ def preferred_real_max_image_dim(
     if dataset_name == "mipnerf360":
         return None
     if dataset_name == "tanks_and_temples":
+        if preset == "sweep":
+            return 800
         if preset in {"smoke", "quick", "preview"}:
             return 960
         return 1280
@@ -285,9 +287,6 @@ def prepare_colmap_scene_to_blender(
             "file_path": f"images/{target_stem}",
             "transform_matrix": blender_transform.tolist(),
         }
-        if include_time_metadata:
-            frame["time"] = 0.0
-
         if len(camera_entries) == 1:
             train_frames.append(frame)
             test_frames.append(frame)
@@ -307,6 +306,11 @@ def prepare_colmap_scene_to_blender(
     elif not val_frames and test_frames:
         val_frames = [test_frames[0]]
 
+    if include_time_metadata:
+        _inject_normalized_time(train_frames)
+        _inject_normalized_time(val_frames)
+        _inject_normalized_time(test_frames)
+
     payload_base = {"camera_angle_x": camera_angle_x or 0.0}
     (prepared_root / "transforms_train.json").write_text(
         json.dumps({**payload_base, "frames": train_frames}, indent=2),
@@ -322,3 +326,15 @@ def prepare_colmap_scene_to_blender(
     )
     meta_path.write_text(json.dumps(expected_meta, indent=2), encoding="utf-8")
     return prepared_root
+
+
+def _inject_normalized_time(frames: list[dict[str, object]]) -> None:
+    """Atribui tempo sintetico no intervalo [0, 1] para cada split."""
+    if not frames:
+        return
+    if len(frames) == 1:
+        frames[0]["time"] = 0.0
+        return
+    last_index = len(frames) - 1
+    for index, frame in enumerate(frames):
+        frame["time"] = float(index) / float(last_index)

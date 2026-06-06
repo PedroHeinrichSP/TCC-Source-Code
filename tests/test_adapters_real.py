@@ -92,6 +92,7 @@ def _cuda_runtime_probe() -> dict[str, object]:
             "simple_knn._C": None,
             "mmcv": None,
             "plyfile": None,
+            "open3d": None,
         },
     }
 
@@ -277,7 +278,7 @@ class TestAdapterValidation:
 
     @pytest.mark.parametrize("dataset_name", ["mipnerf360", "tanks_and_temples"])
     def test_nerf_dynamic_prepares_real_scene_with_time_metadata(self, tmp_path, dataset_name):
-        """D-NeRF should convert real static scenes to Blender-style frames with synthetic time=0."""
+        """D-NeRF should convert real static scenes with split-local synthetic time spanning [0, 1]."""
         adapter = NeRFDynamicAdapter()
         scene_root = _build_colmap_scene(tmp_path / dataset_name / "scene")
         config = RunConfig(
@@ -301,6 +302,10 @@ class TestAdapterValidation:
 
         assert train_payload["frames"][0]["time"] == 0.0
         assert test_payload["frames"][0]["time"] == 0.0
+        if len(train_payload["frames"]) > 1:
+            assert train_payload["frames"][-1]["time"] == 1.0
+        if len(test_payload["frames"]) > 1:
+            assert test_payload["frames"][-1]["time"] == 1.0
 
     def test_nerf_dynamic_quick_downscales_tanks_and_temples(self, tmp_path):
         """Quick preset should cap Tanks and Temples images during conversion."""
@@ -467,13 +472,26 @@ class TestIterationResolution:
         )
         assert result["N_iter"] == 1000
 
+    def test_preset_sweep(self):
+        """Testa preset sweep para NeRF estÃ¡tico."""
+        result = resolve_iterations(
+            method_id="nerf_static",
+            preset_name="sweep",
+        )
+        assert result["N_iter"] == 8000
+        assert result["nerf_n_samples"] == 48
+        assert result["nerf_n_importance"] == 32
+        assert result["nerf_n_rand"] == 512
+
     def test_preset_standard(self):
         """Testa preset standard para NeRF estático."""
         result = resolve_iterations(
             method_id="nerf_static",
             preset_name="standard",
         )
-        assert result["N_iter"] == 50000
+        assert result["N_iter"] == 15000
+        assert result["nerf_n_importance"] == 64
+        assert result["nerf_n_rand"] == 768
 
     def test_preset_full(self):
         """Testa preset full para NeRF estático."""
@@ -546,6 +564,53 @@ class TestIterationResolution:
         assert "coarse_iterations = 1750" in content
         assert "'resolution': [64, 64, 64, 25]" in content
 
+    def test_gs_dynamic_standard_uses_balanced_runtime_tuning(self, tmp_path):
+        """Preset standard do 4DGS deve reduzir a grade espacial/temporal para GPUs intermediarias."""
+        adapter = GSDynamicAdapter()
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(
+                name="d_nerf",
+                root=str(tmp_path / "lego"),
+                metadata={"has_time_metadata": True},
+            ),
+            method="gs_dynamic",
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "standard"},
+        )
+
+        content = adapter._build_dnerf_config_text(config)
+
+        assert "iterations = 9000" in content
+        assert "coarse_iterations = 1200" in content
+        assert "'resolution': [48, 48, 48, 16]" in content
+        assert "net_width = 48" in content
+
+    def test_gs_dynamic_sweep_uses_ultralight_runtime_tuning(self, tmp_path):
+        """Preset sweep do 4DGS deve priorizar turnaround para varias cenas."""
+        adapter = GSDynamicAdapter()
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(
+                name="d_nerf",
+                root=str(tmp_path / "lego"),
+                metadata={"has_time_metadata": True},
+            ),
+            method="gs_dynamic",
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "sweep"},
+        )
+
+        content = adapter._build_dnerf_config_text(config)
+        command = adapter._build_train_command(config, tmp_path / "model", tmp_path / "config.py")
+
+        assert "iterations = 4500" in content
+        assert "coarse_iterations = 600" in content
+        assert "'resolution': [32, 32, 32, 10]" in content
+        assert "net_width = 32" in content
+        assert "--resolution" in command
+        assert "960" in command
+
 
     def test_gs_static_blender_commands_include_eval_and_white_background(self, tmp_path):
         """Garante flags necessarias para split de teste no Blender Synthetic."""
@@ -570,6 +635,75 @@ class TestIterationResolution:
         assert "--skip_train" in render_command
         assert "-s" in render_command
         assert str(Path(config.dataset.root).resolve()) in render_command
+
+    def test_gs_static_sweep_command_includes_resolution(self, tmp_path):
+        """Preset sweep do 3DGS deve reduzir a resolucao de treino para cenas grandes."""
+        adapter = GSStaticAdapter()
+        dataset_dir = tmp_path / "dataset"
+        model_dir = tmp_path / "model"
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="mipnerf360", root=str(dataset_dir)),
+            method="gs_static",
+            hardware_profile=HardwareProfile.ADAPTIVE,
+            extra={"preset": "sweep"},
+        )
+
+        train_command = adapter._build_train_command(config, model_dir)
+        render_command = adapter._build_render_command(config, str(model_dir), split="test")
+
+        assert "--resolution" in train_command
+        assert "1024" in train_command
+        assert "--resolution" in render_command
+        assert "1024" in render_command
+
+    def test_gs_static_infer_uses_request_split_by_default(self, tmp_path, monkeypatch):
+        """Sem override explicito, a inferencia deve seguir o split solicitado."""
+        adapter = GSStaticAdapter()
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        render_parent = tmp_path / "checkpoint" / "train" / "ours_1" / "renders"
+        gt_parent = render_parent.parent / "gt"
+        render_parent.mkdir(parents=True)
+        gt_parent.mkdir(parents=True)
+        render_source = render_parent / "00000.png"
+        render_source.write_bytes(b"png")
+        (gt_parent / "00000.png").write_bytes(b"png")
+
+        config = RunConfig(
+            run_id="test",
+            dataset=DatasetSpec(name="mipnerf360", root=str(dataset_dir), split="train"),
+            method="gs_static",
+            output_dir=str(tmp_path / "artifacts"),
+            log_dir=str(tmp_path / "logs"),
+            hardware_profile=HardwareProfile.ADAPTIVE,
+        )
+
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(adapter, "validate_config", lambda _: None)
+
+        def fake_build_render_command(config, checkpoint_path, split="test"):
+            captured["split"] = split
+            return ["python", "render.py"]
+
+        monkeypatch.setattr(adapter, "_build_render_command", fake_build_render_command)
+        monkeypatch.setattr(adapter, "_run_command", lambda **_: None)
+        monkeypatch.setattr(adapter, "_resolve_render_sources", lambda *args, **kwargs: [render_source])
+
+        result = adapter.infer(
+            InferenceRequest(
+                config=config,
+                checkpoint_path=str(tmp_path / "checkpoint"),
+                split="train",
+            )
+        )
+
+        assert captured["split"] == "train"
+        assert result.frames == 1
+        assert result.logs["eval_split"] == "train"
+        assert result.logs["reference_frames"] == 1
+        assert Path(result.logs["reference_dir"]).joinpath("frame_0000.png").exists()
 
     def test_gs_static_normalizes_render_names_for_benchmark_metrics(self, tmp_path):
         """Garante nomes frame_XXXX para casar com referencias exportadas."""

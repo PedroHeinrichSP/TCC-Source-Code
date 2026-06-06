@@ -23,6 +23,7 @@ from nvs_benchmark.core import (
 )
 from nvs_benchmark.core.presets import resolve_iterations
 from nvs_benchmark.methods.scene_converters import has_pose_priors, has_real_scene_layout
+from nvs_benchmark.methods.subprocess_utils import format_subprocess_error, run_subprocess_streaming
 
 
 class GSDynamicRuntimeError(RuntimeError):
@@ -40,8 +41,14 @@ class GSDynamicDependencyError(GSDynamicRuntimeError):
 def _find_images(directory: Path) -> list[Path]:
     patterns = ("*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG")
     files: list[Path] = []
+    seen: set[str] = set()
     for pattern in patterns:
-        files.extend(directory.rglob(pattern))
+        for path in directory.rglob(pattern):
+            key = str(path.resolve()).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(path)
     return sorted(files)
 
 
@@ -179,7 +186,7 @@ class GSDynamicAdapter:
         """Executa renderização real via render.py do 4DGaussians."""
         self.validate_config(request.config)
         start = perf_counter()
-        eval_split = str(request.config.extra.get("gs_dynamic_eval_split", "test")).strip().lower() or "test"
+        eval_split = self._resolve_eval_split(request)
 
         output_base = Path(request.config.output_dir) / request.config.run_id / self.method_id
         render_dir = output_base / "renders"
@@ -198,7 +205,13 @@ class GSDynamicAdapter:
         )
 
         source_images = self._resolve_render_sources(model_dir, split=eval_split)
+        reference_images = self._resolve_reference_sources(source_images)
         frames = self._copy_renders_to_output(source_images=source_images, render_dir=render_dir)
+        reference_dir = output_base / "references_backend"
+        reference_frames = self._copy_reference_frames_to_output(
+            source_images=reference_images,
+            reference_dir=reference_dir,
+        )
         if frames == 0:
             raise RuntimeError(
                 "Inferencia 4DGS finalizou sem imagens renderizadas. "
@@ -220,6 +233,8 @@ class GSDynamicAdapter:
                 "eval_split": eval_split,
                 "command": command,
                 "config_file": str(config_file),
+                "reference_dir": str(reference_dir) if reference_frames > 0 else None,
+                "reference_frames": reference_frames,
             },
         )
 
@@ -274,7 +289,7 @@ except Exception as exc:
 else:
     result["torch_version"] = getattr(torch, "__version__", "unknown")
     result["cuda_available"] = bool(torch.cuda.is_available())
-    for module_name in ("mmcv", "simple_knn._C", "plyfile"):
+    for module_name in ("mmcv", "simple_knn._C", "plyfile", "open3d"):
         try:
             importlib.import_module(module_name)
         except Exception as exc:
@@ -288,16 +303,15 @@ print(json.dumps(result))
             [python_executable, "-c", probe_script],
             cwd=str(repo_path),
             capture_output=True,
-            text=True,
             check=False,
         )
         if completed.returncode != 0:
-            stderr = completed.stderr[-4000:] if completed.stderr else ""
+            stderr = self._decode_output(completed.stderr)[-4000:]
             raise GSDynamicDependencyError(
                 "Nao foi possivel inspecionar o runtime do 4DGaussians. "
                 f"Interpretador: {python_executable}. STDERR: {stderr}"
             )
-        stdout = completed.stdout.strip()
+        stdout = self._decode_output(completed.stdout).strip()
         if not stdout:
             raise GSDynamicDependencyError("Probe do runtime do 4DGaussians nao retornou dados.")
         try:
@@ -345,16 +359,20 @@ print(json.dumps(result))
         coarse_iterations = int(
             config.extra.get(
                 "gs_dynamic_coarse_iterations",
-                min(3000, max(100, fine_iterations // 4)),
+                iter_params.get("gs_dynamic_coarse_iterations", min(3000, max(100, fine_iterations // 4))),
             )
         )
-        time_resolution = int(config.extra.get("gs_dynamic_time_resolution", 25))
-        spatial_resolution = list(config.extra.get("gs_dynamic_spatial_resolution", [64, 64, 64]))
-        multires = list(config.extra.get("gs_dynamic_multires", [1, 2]))
-        net_width = int(config.extra.get("gs_dynamic_net_width", 64))
-        defor_depth = int(config.extra.get("gs_dynamic_defor_depth", 0))
-        bounds = float(config.extra.get("gs_dynamic_bounds", 1.6))
-        render_process = bool(config.extra.get("gs_dynamic_render_process", False))
+        time_resolution = int(config.extra.get("gs_dynamic_time_resolution", iter_params.get("gs_dynamic_time_resolution", 25)))
+        spatial_resolution = list(
+            config.extra.get("gs_dynamic_spatial_resolution", iter_params.get("gs_dynamic_spatial_resolution", [64, 64, 64]))
+        )
+        multires = list(config.extra.get("gs_dynamic_multires", iter_params.get("gs_dynamic_multires", [1, 2])))
+        net_width = int(config.extra.get("gs_dynamic_net_width", iter_params.get("gs_dynamic_net_width", 64)))
+        defor_depth = int(config.extra.get("gs_dynamic_defor_depth", iter_params.get("gs_dynamic_defor_depth", 0)))
+        bounds = float(config.extra.get("gs_dynamic_bounds", iter_params.get("gs_dynamic_bounds", 1.6)))
+        render_process = bool(
+            config.extra.get("gs_dynamic_render_process", iter_params.get("gs_dynamic_render_process", False))
+        )
 
         return (
             "OptimizationParams = dict(\n"
@@ -393,6 +411,13 @@ print(json.dumps(result))
         if custom is not None:
             return custom
 
+        iter_params = resolve_iterations(
+            method_id=self.method_id,
+            preset_name=config.extra.get("preset"),
+            iterations=config.extra.get("iterations"),
+            extra=config.extra,
+            hardware_profile=config.hardware_profile,
+        )
         command = [
             self._resolve_python(config),
             "train.py",
@@ -407,11 +432,29 @@ print(json.dumps(result))
             "--port",
             str(int(config.extra.get("gs_dynamic_port", 6017))),
         ]
+        gs_resolution = config.extra.get("gs_dynamic_resolution", iter_params.get("gs_dynamic_resolution"))
+        if gs_resolution is not None:
+            command.extend(["--resolution", str(int(gs_resolution))])
 
         extra_args = self._normalize_command(config.extra.get("gs_dynamic_train_args"))
         if extra_args:
             command.extend(extra_args)
         return command
+
+    def _resolve_eval_split(self, request: InferenceRequest) -> str:
+        explicit = str(request.config.extra.get("gs_dynamic_eval_split", "")).strip().lower()
+        if explicit:
+            return explicit
+
+        requested = str(request.split).strip().lower()
+        if requested:
+            return requested
+
+        dataset_split = str(request.config.dataset.split).strip().lower()
+        if dataset_split:
+            return dataset_split
+
+        return "test"
 
     def _build_render_command(
         self,
@@ -425,6 +468,13 @@ print(json.dumps(result))
         if custom is not None:
             return custom
 
+        iter_params = resolve_iterations(
+            method_id=self.method_id,
+            preset_name=config.extra.get("preset"),
+            iterations=config.extra.get("iterations"),
+            extra=config.extra,
+            hardware_profile=config.hardware_profile,
+        )
         command = [
             self._resolve_python(config),
             "render.py",
@@ -434,6 +484,9 @@ print(json.dumps(result))
             str(config_file.resolve()),
             "--skip_video",
         ]
+        gs_resolution = config.extra.get("gs_dynamic_resolution", iter_params.get("gs_dynamic_resolution"))
+        if gs_resolution is not None:
+            command.extend(["--resolution", str(int(gs_resolution))])
 
         iteration = config.extra.get("gs_dynamic_render_iteration")
         if iteration is not None:
@@ -478,24 +531,27 @@ print(json.dumps(result))
         return env
 
     def _run_command(self, command: list[str], cwd: Path, env: dict[str, str], stage: str) -> None:
-        completed = subprocess.run(
+        print(f"[{self.method_id}] Executando {stage}: {' '.join(command[:4])}...", flush=True)
+        completed = run_subprocess_streaming(
             command,
-            cwd=str(cwd),
+            cwd=cwd,
             env=env,
-            capture_output=True,
-            text=True,
-            check=False,
         )
-        if completed.returncode != 0:
-            stdout = completed.stdout[-4000:] if completed.stdout else ""
-            stderr = completed.stderr[-4000:] if completed.stderr else ""
+        if not completed.success:
             raise RuntimeError(
                 f"Falha em gs_dynamic::{stage} (exit={completed.returncode}).\n"
                 f"Comando: {' '.join(command)}\n"
                 f"CWD: {cwd}\n"
-                f"STDOUT:\n{stdout}\n"
-                f"STDERR:\n{stderr}"
+                f"{format_subprocess_error(completed)}"
             )
+
+    @staticmethod
+    def _decode_output(payload: bytes | str | None) -> str:
+        if payload is None:
+            return ""
+        if isinstance(payload, bytes):
+            return payload.decode("utf-8", errors="replace")
+        return payload
 
     def _resolve_render_sources(self, model_dir: Path, *, split: str = "test") -> list[Path]:
         if not model_dir.exists():
@@ -526,6 +582,19 @@ print(json.dumps(result))
         fallback = _find_images(model_dir)
         return fallback
 
+    def _resolve_reference_sources(self, render_sources: list[Path]) -> list[Path]:
+        if not render_sources:
+            return []
+
+        render_dir = render_sources[0].parent
+        if render_dir.name != "renders":
+            return []
+
+        gt_dir = render_dir.parent / "gt"
+        if not gt_dir.exists():
+            return []
+        return _find_images(gt_dir)
+
     def _copy_renders_to_output(self, source_images: list[Path], render_dir: Path) -> int:
         if not source_images:
             return 0
@@ -538,5 +607,20 @@ print(json.dumps(result))
         for index, source in enumerate(source_images):
             target_name = f"frame_{index:04d}.png"
             shutil.copyfile(source, render_dir / target_name)
+            copied += 1
+        return copied
+
+    def _copy_reference_frames_to_output(self, source_images: list[Path], reference_dir: Path) -> int:
+        if not source_images:
+            return 0
+
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        for old in reference_dir.glob("*.png"):
+            old.unlink(missing_ok=True)
+
+        copied = 0
+        for index, source in enumerate(source_images):
+            target_name = f"frame_{index:04d}.png"
+            shutil.copyfile(source, reference_dir / target_name)
             copied += 1
         return copied

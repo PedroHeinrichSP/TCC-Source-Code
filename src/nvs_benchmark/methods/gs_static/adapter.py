@@ -23,6 +23,7 @@ from nvs_benchmark.core import (
 )
 from nvs_benchmark.core.presets import resolve_iterations
 from nvs_benchmark.methods.scene_converters import has_pose_priors, has_real_scene_layout
+from nvs_benchmark.methods.subprocess_utils import format_subprocess_error, run_subprocess_streaming
 
 
 class GSStaticRuntimeError(RuntimeError):
@@ -147,7 +148,7 @@ class GSStaticAdapter:
         """Executa inferência real via script oficial render.py do 3DGS."""
         self.validate_config(request.config)
         start = perf_counter()
-        eval_split = str(request.config.extra.get("gs_eval_split", "test")).strip().lower() or "test"
+        eval_split = self._resolve_eval_split(request)
 
         render_dir = Path(request.config.output_dir) / request.config.run_id / self.method_id / "renders"
         render_dir.mkdir(parents=True, exist_ok=True)
@@ -166,11 +167,17 @@ class GSStaticAdapter:
             request.checkpoint_path,
             split=eval_split,
         )
+        reference_images = self._resolve_reference_sources(source_images)
         frames = self._copy_renders_to_output(
             source_images=source_images,
             render_dir=render_dir,
             dataset_root=Path(request.config.dataset.root),
             split=eval_split,
+        )
+        reference_dir = Path(request.config.output_dir) / request.config.run_id / self.method_id / "references_backend"
+        reference_frames = self._copy_reference_frames_to_output(
+            source_images=reference_images,
+            reference_dir=reference_dir,
         )
 
         if frames == 0:
@@ -190,6 +197,8 @@ class GSStaticAdapter:
                 "checkpoint_used": request.checkpoint_path,
                 "eval_split": eval_split,
                 "command": command,
+                "reference_dir": str(reference_dir) if reference_frames > 0 else None,
+                "reference_frames": reference_frames,
             },
         )
 
@@ -249,16 +258,15 @@ print(json.dumps(result))
             [python_executable, "-c", probe_script],
             cwd=str(repo_path),
             capture_output=True,
-            text=True,
             check=False,
         )
         if completed.returncode != 0:
-            stderr = completed.stderr[-4000:] if completed.stderr else ""
+            stderr = self._decode_output(completed.stderr)[-4000:]
             raise GSStaticDependencyError(
                 "Nao foi possivel inspecionar o runtime do Gaussian Splatting. "
                 f"Interpretador: {python_executable}. STDERR: {stderr}"
             )
-        stdout = completed.stdout.strip()
+        stdout = self._decode_output(completed.stdout).strip()
         if not stdout:
             raise GSStaticDependencyError("Probe do runtime do Gaussian Splatting nao retornou dados.")
         try:
@@ -301,6 +309,9 @@ print(json.dumps(result))
         gs_iterations = iter_params.get("iterations")
         if gs_iterations is not None:
             command.extend(["--iterations", str(gs_iterations)])
+        gs_resolution = config.extra.get("gs_resolution", iter_params.get("gs_resolution"))
+        if gs_resolution is not None:
+            command.extend(["--resolution", str(int(gs_resolution))])
 
         if self._uses_blender_synthetic_defaults(config):
             command.extend(["--eval", "--white_background"])
@@ -315,12 +326,22 @@ print(json.dumps(result))
         if custom is not None:
             return custom
 
+        iter_params = resolve_iterations(
+            method_id=self.method_id,
+            preset_name=config.extra.get("preset"),
+            iterations=config.extra.get("iterations"),
+            extra=config.extra,
+            hardware_profile=config.hardware_profile,
+        )
         command = [
             self._resolve_python(config),
             "render.py",
             "-m",
             str(Path(checkpoint_path).resolve()),
         ]
+        gs_resolution = config.extra.get("gs_resolution", iter_params.get("gs_resolution"))
+        if gs_resolution is not None:
+            command.extend(["--resolution", str(int(gs_resolution))])
         if self._uses_blender_synthetic_defaults(config):
             command.extend(
                 [
@@ -339,6 +360,21 @@ print(json.dumps(result))
         if extra_args:
             command.extend(extra_args)
         return command
+
+    def _resolve_eval_split(self, request: InferenceRequest) -> str:
+        explicit = str(request.config.extra.get("gs_eval_split", "")).strip().lower()
+        if explicit:
+            return explicit
+
+        requested = str(request.split).strip().lower()
+        if requested:
+            return requested
+
+        dataset_split = str(request.config.dataset.split).strip().lower()
+        if dataset_split:
+            return dataset_split
+
+        return "test"
 
     def _uses_blender_synthetic_defaults(self, config: RunConfig) -> bool:
         return config.dataset.name == "blender_synthetic"
@@ -378,24 +414,27 @@ print(json.dumps(result))
         return env
 
     def _run_command(self, command: list[str], cwd: Path, env: dict[str, str], stage: str) -> None:
-        completed = subprocess.run(
+        print(f"[{self.method_id}] Executando {stage}: {' '.join(command[:4])}...", flush=True)
+        completed = run_subprocess_streaming(
             command,
-            cwd=str(cwd),
+            cwd=cwd,
             env=env,
-            capture_output=True,
-            text=True,
-            check=False,
         )
-        if completed.returncode != 0:
-            stdout = completed.stdout[-4000:] if completed.stdout else ""
-            stderr = completed.stderr[-4000:] if completed.stderr else ""
+        if not completed.success:
             raise RuntimeError(
                 f"Falha em gs_static::{stage} (exit={completed.returncode}).\n"
                 f"Comando: {' '.join(command)}\n"
                 f"CWD: {cwd}\n"
-                f"STDOUT:\n{stdout}\n"
-                f"STDERR:\n{stderr}"
+                f"{format_subprocess_error(completed)}"
             )
+
+    @staticmethod
+    def _decode_output(payload: bytes | str | None) -> str:
+        if payload is None:
+            return ""
+        if isinstance(payload, bytes):
+            return payload.decode("utf-8", errors="replace")
+        return payload
 
     def _resolve_render_sources(self, config: RunConfig, checkpoint_path: str, split: str = "test") -> list[Path]:
         explicit_render_dir = config.extra.get("gs_render_output_dir")
@@ -426,6 +465,19 @@ print(json.dumps(result))
                 break
         return images
 
+    def _resolve_reference_sources(self, render_sources: list[Path]) -> list[Path]:
+        if not render_sources:
+            return []
+
+        render_dir = render_sources[0].parent
+        if render_dir.name != "renders":
+            return []
+
+        gt_dir = render_dir.parent / "gt"
+        if not gt_dir.exists():
+            return []
+        return sorted(gt_dir.glob("*.png"))
+
     def _copy_renders_to_output(
         self,
         source_images: list[Path],
@@ -447,5 +499,20 @@ print(json.dumps(result))
             # exported references so quality metrics can match pairs.
             target_name = f"frame_{index:04d}.png"
             shutil.copyfile(source, render_dir / target_name)
+            copied += 1
+        return copied
+
+    def _copy_reference_frames_to_output(self, source_images: list[Path], reference_dir: Path) -> int:
+        if not source_images:
+            return 0
+
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        for old in reference_dir.glob("*.png"):
+            old.unlink(missing_ok=True)
+
+        copied = 0
+        for index, source in enumerate(source_images):
+            target_name = f"frame_{index:04d}.png"
+            shutil.copyfile(source, reference_dir / target_name)
             copied += 1
         return copied

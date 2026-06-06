@@ -408,29 +408,33 @@ def estimate_execution_time(
         "nerf_static": {
             "smoke": (100, 1, 2),  # (iterações, min, max)
             "quick": (1000, 5, 15),
+            "sweep": (4500, 20, 90),
             "preview": (10000, 30, 60),
-            "standard": (50000, 120, 360),
+            "standard": (15000, 75, 240),
             "full": (200000, 1800, 3600),
         },
         "nerf_dynamic": {
             "smoke": (100, 2, 3),
             "quick": (1000, 7, 20),
+            "sweep": (4500, 35, 120),
             "preview": (10000, 40, 90),
-            "standard": (50000, 180, 480),
+            "standard": (15000, 105, 300),
             "full": (200000, 2400, 4800),
         },
         "gs_static": {
             "smoke": (100, 30, 60),  # GS é mais lento no setup
             "quick": (1000, 60, 180),
+            "sweep": (4500, 90, 240),
             "preview": (10000, 300, 600),
-            "standard": (50000, 1800, 3600),
+            "standard": (10000, 240, 600),
             "full": (200000, 7200, 14400),
         },
         "gs_dynamic": {
             "smoke": (100, 40, 80),
             "quick": (1000, 120, 300),
+            "sweep": (4500, 180, 420),
             "preview": (10000, 600, 1200),
-            "standard": (50000, 3600, 7200),
+            "standard": (9000, 360, 660),
             "full": (200000, 14400, 28800),
         },
     }

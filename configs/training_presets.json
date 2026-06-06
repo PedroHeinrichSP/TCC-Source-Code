@@ -16,6 +16,44 @@
       "gs_static": {"iterations": 1000},
       "gs_dynamic": {"iterations": 1000}
     },
+    "sweep": {
+      "label": "Sweep Multi-cena",
+      "description": "Varredura multi-cena com qualidade intermediaria para varias cenas em GPU 8-12GB (~1-6h em GPU, conforme metodo/cena)",
+      "nerf_static": {
+        "N_iter": 8000,
+        "i_weights": 4000,
+        "i_testset": 8000,
+        "i_video": 8000,
+        "i_print": 250,
+        "nerf_n_samples": 48,
+        "nerf_n_importance": 32,
+        "nerf_n_rand": 512,
+        "nerf_chunk": 2048,
+        "nerf_netchunk": 8192
+      },
+      "nerf_dynamic": {
+        "N_iter": 8000,
+        "i_weights": 4000,
+        "i_testset": 8000,
+        "i_video": 8000,
+        "i_print": 250,
+        "nerf_n_samples": 96,
+        "nerf_n_importance": 48,
+        "nerf_n_rand": 512
+      },
+      "gs_static": {
+        "iterations": 4500,
+        "gs_resolution": 1024
+      },
+      "gs_dynamic": {
+        "iterations": 4500,
+        "gs_dynamic_coarse_iterations": 600,
+        "gs_dynamic_time_resolution": 10,
+        "gs_dynamic_spatial_resolution": [32, 32, 32],
+        "gs_dynamic_net_width": 32,
+        "gs_dynamic_resolution": 960
+      }
+    },
     "preview": {
       "label": "Preview",
       "description": "Resultados visíveis com qualidade razoável (~30-60 min CPU)",
@@ -26,17 +64,43 @@
     },
     "standard": {
       "label": "Padrão",
-      "description": "Resultados de qualidade para comparação com papers (~2-6h CPU)",
-      "nerf_static": {"N_iter": 50000, "i_weights": 10000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
-      "nerf_dynamic": {"N_iter": 50000, "i_weights": 10000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
-      "gs_static": {"iterations": 30000},
-      "gs_dynamic": {"iterations": 30000}
+      "description": "Perfil equilibrado para comparação prática (~1-4h em GPU 8-12GB, conforme método/cena)",
+      "nerf_static": {
+        "N_iter": 15000,
+        "i_weights": 5000,
+        "i_testset": 15000,
+        "i_video": 15000,
+        "i_print": 500,
+        "nerf_n_samples": 48,
+        "nerf_n_importance": 64,
+        "nerf_n_rand": 768,
+        "nerf_chunk": 2048,
+        "nerf_netchunk": 8192
+      },
+      "nerf_dynamic": {
+        "N_iter": 15000,
+        "i_weights": 5000,
+        "i_testset": 15000,
+        "i_video": 15000,
+        "i_print": 500,
+        "nerf_n_samples": 96,
+        "nerf_n_importance": 64,
+        "nerf_n_rand": 768
+      },
+      "gs_static": {"iterations": 10000},
+      "gs_dynamic": {
+        "iterations": 9000,
+        "gs_dynamic_coarse_iterations": 1200,
+        "gs_dynamic_time_resolution": 16,
+        "gs_dynamic_spatial_resolution": [48, 48, 48],
+        "gs_dynamic_net_width": 48
+      }
     },
     "full": {
       "label": "Completo (Paper)",
       "description": "Reprodução completa dos papers originais (~12-48h CPU)",
-      "nerf_static": {"N_iter": 200000, "i_weights": 50000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
-      "nerf_dynamic": {"N_iter": 800000, "i_weights": 100000, "i_testset": 200000, "i_video": 200000, "i_print": 1000},
+      "nerf_static": {"N_iter": 50000, "i_weights": 50000, "i_testset": 50000, "i_video": 50000, "i_print": 1000},
+      "nerf_dynamic": {"N_iter": 10000, "i_weights": 100000, "i_testset": 200000, "i_video": 200000, "i_print": 1000},
       "gs_static": {"iterations": 30000},
       "gs_dynamic": {"iterations": 40000}
     }

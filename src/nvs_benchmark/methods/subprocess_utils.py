@@ -196,6 +196,109 @@ def run_subprocess(
     )
 
 
+def run_subprocess_streaming(
+    command: Sequence[str],
+    *,
+    cwd: str | Path | None = None,
+    timeout: int | None = None,
+    env: dict[str, str] | None = None,
+) -> SubprocessResult:
+    """Executa subprocesso transmitindo a saida em tempo real para stdout."""
+    import os
+
+    effective_env: dict[str, str] = dict(os.environ)
+    effective_env.setdefault("PYTHONUNBUFFERED", "1")
+    if env:
+        effective_env.update(env)
+
+    cmd_list = [str(c) for c in command]
+    start = time.perf_counter()
+    timed_out = False
+    returncode = -1
+    combined_chunks: list[str] = []
+
+    try:
+        proc = subprocess.Popen(
+            cmd_list,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=effective_env,
+            bufsize=1,
+        )
+        stream = proc.stdout
+        if stream is None:
+            raise RuntimeError("Processo iniciou sem stdout capturavel.")
+
+        current_chunk: list[str] = []
+        while True:
+            if timeout is not None and (time.perf_counter() - start) > timeout:
+                timed_out = True
+                proc.kill()
+                break
+
+            char = stream.read(1)
+            if char == "":
+                if proc.poll() is not None:
+                    break
+                continue
+
+            if char in ("\r", "\n"):
+                if current_chunk:
+                    line = "".join(current_chunk)
+                    print(line, flush=True)
+                    combined_chunks.append(line + "\n")
+                    current_chunk = []
+            else:
+                current_chunk.append(char)
+
+        if current_chunk:
+            line = "".join(current_chunk)
+            print(line, flush=True)
+            combined_chunks.append(line + "\n")
+
+        remaining_stdout, _ = proc.communicate()
+        if remaining_stdout:
+            print(remaining_stdout, end="" if remaining_stdout.endswith("\n") else "\n", flush=True)
+            combined_chunks.append(remaining_stdout)
+
+        returncode = proc.returncode if proc.returncode is not None else -1
+        if timed_out:
+            returncode = -1
+            combined_chunks.append(f"\n[TIMEOUT] Processo encerrado apos {timeout}s.\n")
+
+    except FileNotFoundError as exc:
+        returncode = 127
+        combined_chunks.append(
+            f"[ERRO] Comando nao encontrado: {cmd_list[0]}\n"
+            f"Verifique se o executavel esta no PATH.\nDetalhe: {exc}\n"
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        returncode = -1
+        combined_chunks.append(f"[ERRO] Falha inesperada ao iniciar subprocesso: {exc}\n")
+
+    combined_text = "".join(combined_chunks)
+    duration = time.perf_counter() - start
+    oom_detected, oom_hint = _detect_oom(combined_text, combined_text)
+    traceback_text = _extract_traceback(combined_text)
+
+    return SubprocessResult(
+        command=cmd_list,
+        returncode=returncode,
+        stdout=combined_text,
+        stderr=combined_text,
+        duration_seconds=duration,
+        timed_out=timed_out,
+        oom_detected=oom_detected,
+        oom_hint=oom_hint,
+        error_traceback=traceback_text,
+    )
+
+
 def format_subprocess_error(result: SubprocessResult) -> str:
     """Formata mensagem de erro legível para exibir ao estudante.
 

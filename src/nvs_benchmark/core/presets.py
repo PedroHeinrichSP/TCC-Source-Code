@@ -11,7 +11,7 @@ from .contracts import HardwareProfile
 
 _DEFAULT_PRESETS_PATH = Path(__file__).resolve().parents[3] / "configs" / "training_presets.json"
 
-PRESET_NAMES = ("smoke", "quick", "preview", "standard", "full")
+PRESET_NAMES = ("smoke", "quick", "sweep", "preview", "standard", "full")
 
 
 @dataclass(frozen=True)

@@ -982,7 +982,7 @@ else:
     g4d_path = Path("./third_party/4d_gaussians")
     if not g4d_path.exists():
         raise FileNotFoundError("Repositorio 4d_gaussians ausente. Execute a celula de setup com CLONE_THIRD_PARTY_IF_MISSING=True.")
-    run_logged([sys.executable, "-m", "pip", "install", "plyfile>=1.0.3", "joblib>=1.4"], label="install-4dgs-runtime")
+    run_logged([sys.executable, "-m", "pip", "install", "plyfile>=1.0.3", "joblib>=1.4", "open3d"], label="install-4dgs-runtime")
     mmcv_probe = run_logged([sys.executable, "-c", "import mmcv; print(mmcv.__version__)"], label="probe-mmcv", check=False)
     if mmcv_probe.returncode != 0:
         mmcv_install = run_logged([sys.executable, "-m", "pip", "install", "mmcv==1.6.0"], label="install-mmcv", check=False)
@@ -991,13 +991,13 @@ else:
     install_extension("depth-diff-gaussian-rasterization", g4d_path / "submodules" / "depth-diff-gaussian-rasterization")
     install_extension("simple-knn-4dgs", g4d_path / "submodules" / "simple-knn")
     probe = run_logged(
-        [sys.executable, "-c", "import mmcv, simple_knn._C, plyfile; print('ok')"],
+        [sys.executable, "-c", "import mmcv, simple_knn._C, plyfile, open3d; print('ok')"],
         label="probe-gs-dynamic",
         check=False,
         cwd=g4d_path,
     )
     if probe.returncode != 0:
-        raise RuntimeError("Extensoes de gs_dynamic nao ficaram disponiveis no kernel atual; revise CUDA, PyTorch e mmcv.")
+        raise RuntimeError("Extensoes de gs_dynamic nao ficaram disponiveis no kernel atual; revise CUDA, PyTorch, mmcv e open3d.")
 
 
 # ---- cell ----
